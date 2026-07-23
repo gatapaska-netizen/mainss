@@ -5,14 +5,14 @@ from telethon.tl.functions.channels import EditAdminRequest
 from telethon.errors import SessionPasswordNeededError, UserAlreadyParticipantError
 import asyncio
 import re
-import os
+import time
 
 # ===== КОНФИГ =====
 BOT_TOKEN = "8695263973:AAHge3QFURlz1nOJVtGmdav5HQ2NL5-RjeI"
 API_ID = 25569323
 API_HASH = "061bad708728d3d928054f16c932de6d"
 
-# Список боссов (смайлик + название)
+# Список боссов (порядок = порядок кнопок в боте)
 BOSSES = [
     {"emoji": "🧚", "name": "Лесная Фея"},
     {"emoji": "🧌", "name": "Гоблин"},
@@ -48,19 +48,19 @@ BOSSES = [
     {"emoji": "🧊", "name": "Морозный Голем"}
 ]
 
-# Клиент бота (командира)
+# Клиент бота
 bot_client = TelegramClient('bot_session', API_ID, API_HASH)
 
 # Переменные
 user_client = None
 is_active = False
-selected_bosses = set()  # Индексы выбранных боссов
+selected_bosses = set()
 chat_id = None
 chat_created = False
 bot_username = "IsekaiGlobal_bot"
-last_attack_time = {}  # Время последней атаки для каждого босса
+last_attack_time = {}
 
-# Статус авторизации для каждого пользователя
+# Статус авторизации
 auth_states = {}
 user_codes = {}
 
@@ -146,7 +146,6 @@ async def handle_phone(event, user_id, phone):
         return
     
     try:
-        # Используем номер для создания уникальной сессии
         session_name = f'user_session_{phone.replace("+", "")}'
         client = TelegramClient(session_name, API_ID, API_HASH)
         await client.connect()
@@ -374,77 +373,85 @@ async def check_bosses():
             print("⚠️ Сообщение с боссами не найдено")
             return
         
-        # 4. Парсим статусы боссов
-        boss_status = {}
-        for i, boss in enumerate(BOSSES):
+        # 4. Парсим статусы выбранных боссов
+        current_time = time.time()
+        alive_bosses = []
+        
+        for index in selected_bosses:
+            boss = BOSSES[index]
+            
             # Ищем строку с боссом
             pattern = rf"{boss['emoji']}.*{boss['name']}.*(Жив!|\d+[мс. ]+\d*[мс.]*)"
             match = re.search(pattern, boss_message)
+            
             if match:
                 status = match.group(1)
-                boss_status[i] = {
-                    "alive": status == "Жив!",
-                    "text": status
-                }
-        
-        # 5. Для каждого выбранного босса проверяем статус
-        import time
-        current_time = time.time()
-        
-        for index in selected_bosses:
-            if index in boss_status and boss_status[index]["alive"]:
-                # Проверяем, не атаковали ли этого босса недавно (ждём 3-4 минуты)
-                last_attack = last_attack_time.get(index, 0)
-                if current_time - last_attack < 180:  # 3 минуты
-                    continue
+                is_alive = status == "Жив!"
                 
-                print(f"⚔️ Босс {BOSSES[index]['name']} жив! Атакуем...")
-                success = await attack_boss(index)
-                if success:
-                    last_attack_time[index] = current_time
-                    print(f"✅ {BOSSES[index]['name']} атакован!")
-                    await asyncio.sleep(3)
+                if is_alive:
+                    # Проверяем, не атаковали ли недавно
+                    last_attack = last_attack_time.get(index, 0)
+                    if current_time - last_attack >= 180:  # 3 минуты прошло
+                        alive_bosses.append(index)
+                        print(f"🔥 {boss['name']} жив и готов к атаке!")
+                    else:
+                        print(f"⏳ {boss['name']} атакован недавно, жду...")
+                else:
+                    print(f"⏳ {boss['name']} не жив ({status}), пропускаю")
+        
+        # 5. Если есть живые боссы — атакуем первого
+        if alive_bosses:
+            # Берём первого живого
+            boss_index = alive_bosses[0]
+            boss = BOSSES[boss_index]
+            
+            print(f"⚔️ Атакую {boss['name']}...")
+            success = await attack_boss(boss_index)
+            
+            if success:
+                last_attack_time[boss_index] = current_time
+                print(f"✅ {boss['name']} успешно атакован! Жду 3 минуты...")
                 
+                # Ждём 3 минуты перед следующей атакой
+                await asyncio.sleep(180)  # 3 минуты
+            else:
+                print(f"❌ Не удалось атаковать {boss['name']}")
+        
     except Exception as e:
         print(f"Ошибка в check_bosses: {e}")
 
+# ===== АТАКА БОССА =====
 async def attack_boss(boss_index):
-    """Атакует босса по индексу"""
+    """Атакует босса по индексу (1-я кнопка = 1-й босс)"""
     global user_client
     
     try:
         # 1. Пишем "бо"
         await user_client.send_message(bot_username, "бо")
-        await asyncio.sleep(1)
+        await asyncio.sleep(2)  # Ждём ответа от бота
         
         # 2. Получаем сообщение с кнопками
         messages = await user_client.get_messages(bot_username, limit=2)
         if not messages:
+            print("❌ Нет сообщений от бота")
             return False
         
-        # 3. Ищем кнопку с нужным смайликом
-        target_emoji = BOSSES[boss_index]["emoji"]
-        
+        # 3. Ищем кнопку по индексу босса
         for msg in messages:
             if msg.buttons:
-                for row in msg.buttons:
-                    for btn in row:
-                        # Проверяем, содержит ли кнопка нужный смайлик
-                        if target_emoji in btn.text:
-                            await msg.click(btn)
-                            print(f"✅ Нажата кнопка {btn.text}")
-                            return True
-        
-        # Если не нашли по смайлику, пробуем по индексу
-        for msg in messages:
-            if msg.buttons:
+                # Получаем все кнопки в плоский список
                 flat_buttons = [btn for row in msg.buttons for btn in row]
+                
+                # Индекс босса = номер кнопки (0 = 1-й босс, 1 = 2-й и т.д.)
                 if boss_index < len(flat_buttons):
                     await msg.click(boss_index)
-                    print(f"✅ Нажата кнопка по индексу {boss_index}")
+                    print(f"✅ Нажата кнопка {boss_index + 1}: {flat_buttons[boss_index].text}")
                     return True
+                else:
+                    print(f"❌ Кнопка с индексом {boss_index} не найдена (всего {len(flat_buttons)})")
+                    return False
         
-        print(f"❌ Кнопка для {BOSSES[boss_index]['name']} не найдена")
+        print("❌ Кнопки не найдены")
         return False
         
     except Exception as e:
