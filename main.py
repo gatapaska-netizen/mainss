@@ -5,13 +5,14 @@ from telethon.tl.functions.channels import EditAdminRequest
 from telethon.errors import SessionPasswordNeededError, UserAlreadyParticipantError
 import asyncio
 import re
+import os
 
 # ===== КОНФИГ =====
 BOT_TOKEN = "8695263973:AAHge3QFURlz1nOJVtGmdav5HQ2NL5-RjeI"
 API_ID = 25569323
 API_HASH = "061bad708728d3d928054f16c932de6d"
 
-# Список боссов
+# Список боссов (смайлик + название)
 BOSSES = [
     {"emoji": "🧚", "name": "Лесная Фея"},
     {"emoji": "🧌", "name": "Гоблин"},
@@ -47,26 +48,24 @@ BOSSES = [
     {"emoji": "🧊", "name": "Морозный Голем"}
 ]
 
-# Клиент бота
+# Клиент бота (командира)
 bot_client = TelegramClient('bot_session', API_ID, API_HASH)
 
 # Переменные
 user_client = None
 is_active = False
-selected_bosses = set()
+selected_bosses = set()  # Индексы выбранных боссов
 chat_id = None
-chat_created = False  # Флаг создан ли чат
+chat_created = False
 bot_username = "IsekaiGlobal_bot"
+last_attack_time = {}  # Время последней атаки для каждого босса
 
 # Статус авторизации для каждого пользователя
 auth_states = {}
-
-# Храним код для каждого пользователя (построчно)
 user_codes = {}
 
 # ===== КЛАВИАТУРЫ =====
 def get_main_keyboard():
-    """Главная клавиатура снизу"""
     global is_active
     toggle_text = "❌ ВЫКЛЮЧИТЬ" if is_active else "✅ ВКЛЮЧИТЬ"
     return [
@@ -76,7 +75,6 @@ def get_main_keyboard():
     ]
 
 def get_bosses_keyboard():
-    """Клавиатура с боссами (4 в ряд)"""
     buttons = []
     row = []
     
@@ -92,11 +90,9 @@ def get_bosses_keyboard():
         buttons.append(row)
     
     buttons.append([KeyboardButton("🔙 НАЗАД")])
-    
     return buttons
 
 def get_code_keyboard():
-    """Цифровая клавиатура для ввода кода"""
     return [
         [KeyboardButton("1️⃣"), KeyboardButton("2️⃣"), KeyboardButton("3️⃣")],
         [KeyboardButton("4️⃣"), KeyboardButton("5️⃣"), KeyboardButton("6️⃣")],
@@ -107,40 +103,32 @@ def get_code_keyboard():
 # ===== ОБРАБОТЧИК СООБЩЕНИЙ =====
 @bot_client.on(events.NewMessage)
 async def handle_message(event):
-    """Обрабатывает все сообщения"""
     if event.is_private:
         user_id = event.sender_id
         text = event.raw_text
         
-        # Если это команда /start
         if text == '/start':
             await start_auth(event, user_id)
             return
         
-        # Проверяем состояние авторизации
         state = auth_states.get(user_id, {})
         step = state.get('step', 'idle')
         
         if step == 'idle':
             await start_auth(event, user_id)
-            
         elif step == 'phone':
             await handle_phone(event, user_id, text)
-            
         elif step == 'code':
             await handle_code_input(event, user_id, text)
-            
         elif step == 'password':
             await handle_password(event, user_id, text)
-            
         elif step == 'done':
             await handle_main_commands(event, text)
 
 # ===== АВТОРИЗАЦИЯ =====
 async def start_auth(event, user_id):
-    """Начинает процесс авторизации"""
     auth_states[user_id] = {'step': 'phone'}
-    user_codes[user_id] = ""  # Очищаем код
+    user_codes[user_id] = ""
     
     await event.respond(
         "🔐 **Добро пожаловать в охотника на боссов!**\n\n"
@@ -151,7 +139,6 @@ async def start_auth(event, user_id):
     )
 
 async def handle_phone(event, user_id, phone):
-    """Обрабатывает номер телефона"""
     phone = re.sub(r'[\s\-\(\)]', '', phone)
     
     if not phone.startswith('+'):
@@ -159,21 +146,23 @@ async def handle_phone(event, user_id, phone):
         return
     
     try:
-        client = TelegramClient(f'user_session_{user_id}', API_ID, API_HASH)
+        # Используем номер для создания уникальной сессии
+        session_name = f'user_session_{phone.replace("+", "")}'
+        client = TelegramClient(session_name, API_ID, API_HASH)
         await client.connect()
         await client.send_code_request(phone)
         
         auth_states[user_id] = {
             'step': 'code',
             'phone': phone,
-            'client': client
+            'client': client,
+            'session_name': session_name
         }
-        user_codes[user_id] = ""  # Очищаем код
+        user_codes[user_id] = ""
         
         await event.respond(
             f"✅ Код подтверждения отправлен на номер `{phone}`!\n\n"
-            f"✏️ **Введи код**, используя кнопки ниже:\n"
-            f"`{''}`",
+            f"✏️ **Введи код**, используя кнопки ниже:",
             buttons=get_code_keyboard()
         )
         
@@ -181,21 +170,17 @@ async def handle_phone(event, user_id, phone):
         await event.respond(f"❌ Ошибка: {str(e)}\nПопробуй ещё раз отправить номер.")
 
 async def handle_code_input(event, user_id, text):
-    """Обрабатывает ввод кода через клавиатуру"""
     global user_codes
     
-    # Если нажали "ГОТОВО"
     if text == "✅ ГОТОВО":
         code = user_codes.get(user_id, "")
         if len(code) < 3:
             await event.respond("❌ Код должен содержать минимум 3 цифры!", buttons=get_code_keyboard())
             return
         
-        # Пробуем войти с кодом
         await handle_code(event, user_id, code)
         return
     
-    # Если нажали "🔙" - удаляем последнюю цифру
     if text == "🔙":
         user_codes[user_id] = user_codes.get(user_id, "")[:-1]
         current_code = user_codes.get(user_id, "")
@@ -205,7 +190,6 @@ async def handle_code_input(event, user_id, text):
         )
         return
     
-    # Извлекаем цифру из эмодзи
     digit_map = {
         "1️⃣": "1", "2️⃣": "2", "3️⃣": "3",
         "4️⃣": "4", "5️⃣": "5", "6️⃣": "6",
@@ -222,7 +206,6 @@ async def handle_code_input(event, user_id, text):
         )
 
 async def handle_code(event, user_id, code):
-    """Подтверждает код"""
     state = auth_states.get(user_id, {})
     client = state.get('client')
     
@@ -246,7 +229,6 @@ async def handle_code(event, user_id, code):
         await event.respond(f"❌ Неверный код: {str(e)}\nПопробуй ещё раз.", buttons=get_code_keyboard())
 
 async def handle_password(event, user_id, password):
-    """Обрабатывает пароль"""
     state = auth_states.get(user_id, {})
     client = state.get('client')
     
@@ -262,7 +244,6 @@ async def handle_password(event, user_id, password):
         await event.respond(f"❌ Неверный пароль: {str(e)}\nПопробуй ещё раз.")
 
 async def complete_auth(event, user_id, client):
-    """Завершает авторизацию"""
     global user_client, chat_id, chat_created
     
     user_client = client
@@ -282,32 +263,27 @@ async def complete_auth(event, user_id, client):
         buttons=get_main_keyboard()
     )
     
-    # Создаём чат для мониторинга
     chat_created = await create_or_get_chat(client)
     if chat_created:
         await event.respond("✅ Чат успешно создан и настроен!")
     else:
         await event.respond("ℹ️ Чат уже существует, подключаюсь...")
     
-    # Запускаем основной цикл
     asyncio.create_task(main_loop())
 
 # ===== СОЗДАНИЕ ЧАТА =====
 async def create_or_get_chat(client):
-    """Создаёт чат или находит существующий"""
     global chat_id, chat_created
     
     me = await client.get_me()
     username = me.username or me.first_name
     chat_name = f"МБЛ ({username})"
     
-    # Ищем существующий чат
     async for dialog in client.iter_dialogs():
         if dialog.name == chat_name:
             chat_id = dialog.id
-            print(f"✅ Найден существующий чат: {chat_name} (ID: {chat_id})")
+            print(f"✅ Найден существующий чат: {chat_name}")
             
-            # Проверяем есть ли IsekaiGlobal_bot в чате
             try:
                 bot_entity = await client.get_entity(bot_username)
                 await client(AddChatUserRequest(
@@ -315,21 +291,15 @@ async def create_or_get_chat(client):
                     user_id=bot_entity,
                     fwd_limit=0
                 ))
-                print("✅ IsekaiGlobal_bot добавлен в чат")
             except UserAlreadyParticipantError:
-                print("ℹ️ IsekaiGlobal_bot уже в чате")
+                pass
             except Exception as e:
-                print(f"⚠️ Ошибка при добавлении IsekaiGlobal_bot: {e}")
+                print(f"⚠️ Ошибка: {e}")
             
-            # Даём админа IsekaiGlobal_bot
             await give_admin_rights(client, chat_id)
             return True
     
-    # Создаём новый чат
     try:
-        print(f"🔄 Создаю новый чат: {chat_name}")
-        
-        # Создаём чат и сразу добавляем IsekaiGlobal_bot
         result = await client(CreateChatRequest(
             users=[bot_username],
             title=chat_name
@@ -337,26 +307,20 @@ async def create_or_get_chat(client):
         
         chat = result.chats[0]
         chat_id = chat.id
-        print(f"✅ Чат создан: {chat_name} (ID: {chat_id})")
+        print(f"✅ Чат создан: {chat_name}")
         
-        # Даём админа IsekaiGlobal_bot
         await give_admin_rights(client, chat_id)
-        
-        # Отправляем приветственное сообщение
         await client.send_message(chat_id, "🤖 Бот для мониторинга боссов активирован!")
-        
         return True
         
     except Exception as e:
-        print(f"❌ Ошибка при создании чата: {e}")
+        print(f"❌ Ошибка: {e}")
         return False
 
 async def give_admin_rights(client, chat_id):
-    """Даёт IsekaiGlobal_bot права администратора"""
     try:
         bot_entity = await client.get_entity(bot_username)
         
-        # Все права администратора
         admin_rights = ChatAdminRights(
             change_info=True,
             post_messages=True,
@@ -371,7 +335,6 @@ async def give_admin_rights(client, chat_id):
             other=True
         )
         
-        # Назначаем IsekaiGlobal_bot администратором
         await client(EditChatAdminRequest(
             chat_id=chat_id,
             user_id=bot_entity,
@@ -382,24 +345,24 @@ async def give_admin_rights(client, chat_id):
         print(f"✅ {bot_username} получил права администратора")
         
     except Exception as e:
-        print(f"⚠️ Не удалось выдать права админа {bot_username}: {e}")
+        print(f"⚠️ Ошибка: {e}")
 
 # ===== МОНИТОРИНГ БОССОВ =====
 async def check_bosses():
-    global is_active, selected_bosses, chat_id, user_client, chat_created
+    global is_active, selected_bosses, chat_id, user_client, chat_created, last_attack_time
     
     if not user_client or not is_active or not selected_bosses or not chat_created:
         return
     
     try:
-        # Пишем "бл" в чат
+        # 1. Пишем "бл" в чат
         await user_client.send_message(chat_id, "бл")
         await asyncio.sleep(2)
         
-        # Получаем последние сообщения
+        # 2. Получаем последние сообщения
         messages = await user_client.get_messages(chat_id, limit=10)
         
-        # Ищем сообщение от IsekaiGlobal_bot с боссами
+        # 3. Ищем сообщение от IsekaiGlobal_bot
         boss_message = None
         bot_entity = await user_client.get_entity(bot_username)
         for msg in messages:
@@ -411,60 +374,93 @@ async def check_bosses():
             print("⚠️ Сообщение с боссами не найдено")
             return
         
-        # Парсим статусы боссов
+        # 4. Парсим статусы боссов
         boss_status = {}
         for i, boss in enumerate(BOSSES):
+            # Ищем строку с боссом
             pattern = rf"{boss['emoji']}.*{boss['name']}.*(Жив!|\d+[мс. ]+\d*[мс.]*)"
             match = re.search(pattern, boss_message)
             if match:
                 status = match.group(1)
-                boss_status[i] = status == "Жив!"
+                boss_status[i] = {
+                    "alive": status == "Жив!",
+                    "text": status
+                }
         
-        # Атакуем живых боссов
+        # 5. Для каждого выбранного босса проверяем статус
+        import time
+        current_time = time.time()
+        
         for index in selected_bosses:
-            if index in boss_status and boss_status[index]:
-                await attack_boss(index)
-                await asyncio.sleep(3)
+            if index in boss_status and boss_status[index]["alive"]:
+                # Проверяем, не атаковали ли этого босса недавно (ждём 3-4 минуты)
+                last_attack = last_attack_time.get(index, 0)
+                if current_time - last_attack < 180:  # 3 минуты
+                    continue
+                
+                print(f"⚔️ Босс {BOSSES[index]['name']} жив! Атакуем...")
+                success = await attack_boss(index)
+                if success:
+                    last_attack_time[index] = current_time
+                    print(f"✅ {BOSSES[index]['name']} атакован!")
+                    await asyncio.sleep(3)
                 
     except Exception as e:
         print(f"Ошибка в check_bosses: {e}")
 
 async def attack_boss(boss_index):
+    """Атакует босса по индексу"""
     global user_client
     
     try:
-        # Пишем "бо"
+        # 1. Пишем "бо"
         await user_client.send_message(bot_username, "бо")
         await asyncio.sleep(1)
         
-        # Получаем сообщение от IsekaiGlobal_bot с кнопками
+        # 2. Получаем сообщение с кнопками
         messages = await user_client.get_messages(bot_username, limit=2)
         if not messages:
-            return
+            return False
         
-        # Ищем кнопку по индексу
+        # 3. Ищем кнопку с нужным смайликом
+        target_emoji = BOSSES[boss_index]["emoji"]
+        
+        for msg in messages:
+            if msg.buttons:
+                for row in msg.buttons:
+                    for btn in row:
+                        # Проверяем, содержит ли кнопка нужный смайлик
+                        if target_emoji in btn.text:
+                            await msg.click(btn)
+                            print(f"✅ Нажата кнопка {btn.text}")
+                            return True
+        
+        # Если не нашли по смайлику, пробуем по индексу
         for msg in messages:
             if msg.buttons:
                 flat_buttons = [btn for row in msg.buttons for btn in row]
                 if boss_index < len(flat_buttons):
                     await msg.click(boss_index)
-                    print(f"⚔️ Атакуем {BOSSES[boss_index]['name']}")
-                    break
+                    print(f"✅ Нажата кнопка по индексу {boss_index}")
+                    return True
+        
+        print(f"❌ Кнопка для {BOSSES[boss_index]['name']} не найдена")
+        return False
+        
     except Exception as e:
         print(f"Ошибка атаки: {e}")
+        return False
 
 # ===== ОСНОВНОЙ ЦИКЛ =====
 async def main_loop():
     while True:
         await check_bosses()
-        await asyncio.sleep(20)
+        await asyncio.sleep(20)  # Проверка каждые 20 секунд
 
-# ===== ОБРАБОТКА КОМАНД С КЛАВИАТУРЫ =====
+# ===== ОБРАБОТКА КОМАНД =====
 async def handle_main_commands(event, text):
-    """Обрабатывает команды с клавиатуры"""
     global is_active, selected_bosses, chat_id, user_client, chat_created
     
-    # ВКЛЮЧИТЬ/ВЫКЛЮЧИТЬ
     if text in ["✅ ВКЛЮЧИТЬ", "❌ ВЫКЛЮЧИТЬ"]:
         is_active = not is_active
         status = "🟢 ВКЛЮЧЕН" if is_active else "🔴 ВЫКЛЮЧЕН"
@@ -474,16 +470,13 @@ async def handle_main_commands(event, text):
             buttons=get_main_keyboard()
         )
     
-    # ВЫБРАТЬ БОССОВ
     elif text == "🎯 ВЫБРАТЬ БОССОВ":
         await event.respond(
             "🎯 **Выбери боссов для охоты:**\n"
-            "✅ - выбран, ⬜ - не выбран\n\n"
-            "Нажимай на кнопки чтобы выбрать/убрать босса.",
+            "✅ - выбран, ⬜ - не выбран",
             buttons=get_bosses_keyboard()
         )
     
-    # СТАТУС БОССОВ
     elif text == "📊 СТАТУС БОССОВ":
         chat_status = "✅ Создан" if chat_created else "❌ Не создан"
         await event.respond(
@@ -493,17 +486,14 @@ async def handle_main_commands(event, text):
             f"📁 Чат: {chat_status}"
         )
     
-    # ОБНОВИТЬ
     elif text == "🔄 ОБНОВИТЬ":
         await event.respond("🔄 Обновляю статус...")
         await check_bosses()
         await event.respond("✅ Готово! Проверь чат МБЛ")
     
-    # НАЗАД (из меню боссов)
     elif text == "🔙 НАЗАД":
         await event.respond("🔙 Возвращаюсь в главное меню", buttons=get_main_keyboard())
     
-    # Выбор босса (кнопки с эмодзи)
     elif any(emoji in text for emoji in ["✅", "⬜"]):
         for i, boss in enumerate(BOSSES):
             if boss['emoji'] in text:
