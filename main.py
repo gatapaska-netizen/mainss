@@ -360,7 +360,7 @@ async def do_equip():
         # 1. Пишем "экип"
         await user_client.send_message(bot_username, "экип")
         print("✏️ Отправил 'экип'")
-        await asyncio.sleep(2)  # Задержка 2 сек
+        await asyncio.sleep(2)
         
         # 2. Получаем сообщение с кнопками
         messages = await user_client.get_messages(bot_username, limit=2)
@@ -374,26 +374,23 @@ async def do_equip():
             if msg.buttons:
                 flat_buttons = [btn for row in msg.buttons for btn in row]
                 
-                # Нажимаем 8-ю кнопку (индекс 7)
                 if len(flat_buttons) >= 8:
-                    await asyncio.sleep(2)  # Задержка 2 сек перед нажатием
+                    await asyncio.sleep(2)
                     await msg.click(7)
                     print("✅ Нажата 8-я кнопка (Слоты)")
-                    await asyncio.sleep(2)  # Задержка 2 сек после нажатия
+                    await asyncio.sleep(2)
                     
-                    # 4. Получаем новое сообщение с кнопками
                     new_messages = await user_client.get_messages(bot_username, limit=2)
                     if new_messages:
                         for new_msg in new_messages:
                             if new_msg.buttons:
                                 new_buttons = [btn for row in new_msg.buttons for btn in row]
                                 
-                                # Нажимаем 6-ю кнопку (индекс 5)
                                 if len(new_buttons) >= 6:
-                                    await asyncio.sleep(2)  # Задержка 2 сек перед нажатием
+                                    await asyncio.sleep(2)
                                     await new_msg.click(5)
                                     print("✅ Нажата 6-я кнопка")
-                                    await asyncio.sleep(2)  # Задержка 2 сек после нажатия
+                                    await asyncio.sleep(2)
                                     break
                     break
         
@@ -411,9 +408,8 @@ async def check_bosses():
     if not user_client or not is_active or not selected_bosses or not chat_created:
         return
     
-    # Проверяем, не пора ли сделать экипировку (раз в 20 минут)
     current_time = time.time()
-    if current_time - last_equip_time >= 1200:  # 20 минут
+    if current_time - last_equip_time >= 1200:
         print("⏰ Пора делать экипировку!")
         await do_equip()
         last_equip_time = current_time
@@ -421,19 +417,15 @@ async def check_bosses():
         await asyncio.sleep(60)
         return
     
-    # Если идёт экипировка — пропускаем охоту
     if is_equip_mode:
         return
     
     try:
-        # 1. Пишем "бл" в чат
         await user_client.send_message(chat_id, "бл")
         await asyncio.sleep(2)
         
-        # 2. Получаем последние сообщения
         messages = await user_client.get_messages(chat_id, limit=10)
         
-        # 3. Ищем сообщение от IsekaiGlobal_bot
         boss_message = None
         bot_entity = await user_client.get_entity(bot_username)
         for msg in messages:
@@ -445,13 +437,11 @@ async def check_bosses():
             print("⚠️ Сообщение с боссами не найдено")
             return
         
-        # 4. Парсим статусы выбранных боссов
         alive_bosses = []
         
         for index in selected_bosses:
             boss = BOSSES[index]
             
-            # Ищем строку с боссом
             pattern = rf"{boss['emoji']}.*{boss['name']}.*(Жив!|\d+[мс. ]+\d*[мс.]*)"
             match = re.search(pattern, boss_message)
             
@@ -460,9 +450,8 @@ async def check_bosses():
                 is_alive = status == "Жив!"
                 
                 if is_alive:
-                    # Проверяем, не атаковали ли недавно (5 минут)
                     last_attack = last_attack_time.get(index, 0)
-                    if current_time - last_attack >= 300:  # 5 минут
+                    if current_time - last_attack >= 300:
                         alive_bosses.append(index)
                         print(f"🔥 {boss['name']} жив и готов к атаке!")
                     else:
@@ -470,7 +459,6 @@ async def check_bosses():
                 else:
                     print(f"⏳ {boss['name']} не жив ({status}), пропускаю")
         
-        # 5. Если есть живые боссы — атакуем первого
         if alive_bosses:
             boss_index = alive_bosses[0]
             boss = BOSSES[boss_index]
@@ -481,14 +469,14 @@ async def check_bosses():
             if success:
                 last_attack_time[boss_index] = current_time
                 print(f"✅ {boss['name']} успешно атакован! Жду 5 минут...")
-                await asyncio.sleep(300)  # 5 минут
+                await asyncio.sleep(300)
             else:
                 print(f"❌ Не удалось атаковать {boss['name']}")
         
     except Exception as e:
         print(f"Ошибка в check_bosses: {e}")
 
-# ===== АТАКА БОССА =====
+# ===== АТАКА БОССА (С ДОБАВЛЕННЫМ "ав+") =====
 async def attack_boss(boss_index):
     """Атакует босса по индексу (1-я кнопка = 1-й босс)"""
     global user_client
@@ -512,6 +500,12 @@ async def attack_boss(boss_index):
                 if boss_index < len(flat_buttons):
                     await msg.click(boss_index)
                     print(f"✅ Нажата кнопка {boss_index + 1}: {flat_buttons[boss_index].text}")
+                    
+                    # 4. После нажатия кнопки отправляем "ав+"
+                    await asyncio.sleep(1)
+                    await user_client.send_message(bot_username, "ав+")
+                    print("✅ Отправлено 'ав+'")
+                    
                     return True
                 else:
                     print(f"❌ Кнопка с индексом {boss_index} не найдена (всего {len(flat_buttons)})")
@@ -528,7 +522,7 @@ async def attack_boss(boss_index):
 async def main_loop():
     while True:
         await check_bosses()
-        await asyncio.sleep(20)  # Проверка каждые 20 секунд
+        await asyncio.sleep(20)
 
 # ===== ОБРАБОТКА КОМАНД =====
 async def handle_main_commands(event, text):
