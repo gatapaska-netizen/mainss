@@ -59,8 +59,8 @@ chat_id = None
 chat_created = False
 bot_username = "IsekaiGlobal_bot"
 last_attack_time = {}
-last_equip_time = 0  # Время последней экипировки
-is_equip_mode = False  # Флаг: сейчас идёт экипировка
+last_equip_time = 0
+is_equip_mode = False
 
 # Статус авторизации
 auth_states = {}
@@ -359,7 +359,8 @@ async def do_equip():
         
         # 1. Пишем "экип"
         await user_client.send_message(bot_username, "экип")
-        await asyncio.sleep(2)
+        print("✏️ Отправил 'экип'")
+        await asyncio.sleep(2)  # Задержка 2 сек
         
         # 2. Получаем сообщение с кнопками
         messages = await user_client.get_messages(bot_username, limit=2)
@@ -375,9 +376,10 @@ async def do_equip():
                 
                 # Нажимаем 8-ю кнопку (индекс 7)
                 if len(flat_buttons) >= 8:
+                    await asyncio.sleep(2)  # Задержка 2 сек перед нажатием
                     await msg.click(7)
                     print("✅ Нажата 8-я кнопка (Слоты)")
-                    await asyncio.sleep(1)
+                    await asyncio.sleep(2)  # Задержка 2 сек после нажатия
                     
                     # 4. Получаем новое сообщение с кнопками
                     new_messages = await user_client.get_messages(bot_username, limit=2)
@@ -388,9 +390,10 @@ async def do_equip():
                                 
                                 # Нажимаем 6-ю кнопку (индекс 5)
                                 if len(new_buttons) >= 6:
+                                    await asyncio.sleep(2)  # Задержка 2 сек перед нажатием
                                     await new_msg.click(5)
                                     print("✅ Нажата 6-я кнопка")
-                                    await asyncio.sleep(1)
+                                    await asyncio.sleep(2)  # Задержка 2 сек после нажатия
                                     break
                     break
         
@@ -410,12 +413,12 @@ async def check_bosses():
     
     # Проверяем, не пора ли сделать экипировку (раз в 20 минут)
     current_time = time.time()
-    if current_time - last_equip_time >= 1200:  # 20 минут (1200 секунд)
+    if current_time - last_equip_time >= 1200:  # 20 минут
         print("⏰ Пора делать экипировку!")
         await do_equip()
         last_equip_time = current_time
         print("⏳ Жду 1 минуту после экипировки...")
-        await asyncio.sleep(60)  # Ждём минуту после экипировки
+        await asyncio.sleep(60)
         return
     
     # Если идёт экипировка — пропускаем охоту
@@ -457,13 +460,13 @@ async def check_bosses():
                 is_alive = status == "Жив!"
                 
                 if is_alive:
-                    # Проверяем, не атаковали ли недавно
+                    # Проверяем, не атаковали ли недавно (5 минут)
                     last_attack = last_attack_time.get(index, 0)
-                    if current_time - last_attack >= 180:  # 3 минуты прошло
+                    if current_time - last_attack >= 300:  # 5 минут
                         alive_bosses.append(index)
                         print(f"🔥 {boss['name']} жив и готов к атаке!")
                     else:
-                        print(f"⏳ {boss['name']} атакован недавно, жду...")
+                        print(f"⏳ {boss['name']} атакован недавно, жду 5 минут...")
                 else:
                     print(f"⏳ {boss['name']} не жив ({status}), пропускаю")
         
@@ -477,8 +480,8 @@ async def check_bosses():
             
             if success:
                 last_attack_time[boss_index] = current_time
-                print(f"✅ {boss['name']} успешно атакован! Жду 3 минуты...")
-                await asyncio.sleep(180)  # 3 минуты
+                print(f"✅ {boss['name']} успешно атакован! Жду 5 минут...")
+                await asyncio.sleep(300)  # 5 минут
             else:
                 print(f"❌ Не удалось атаковать {boss['name']}")
         
