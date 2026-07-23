@@ -1,7 +1,8 @@
 from telethon import TelegramClient, events, Button
-from telethon.tl.types import Message, KeyboardButton
-from telethon.tl.functions.messages import CreateChatRequest, AddChatUserRequest
-from telethon.errors import SessionPasswordNeededError
+from telethon.tl.types import Message, KeyboardButton, ChatAdminRights
+from telethon.tl.functions.messages import CreateChatRequest, AddChatUserRequest, EditChatAdminRequest
+from telethon.tl.functions.channels import EditAdminRequest
+from telethon.errors import SessionPasswordNeededError, UserAlreadyParticipantError
 import asyncio
 import re
 
@@ -54,6 +55,7 @@ user_client = None
 is_active = False
 selected_bosses = set()
 chat_id = None
+chat_created = False  # Флаг создан ли чат
 bot_username = "IsekaiGlobal_bot"
 
 # Статус авторизации для каждого пользователя
@@ -261,7 +263,7 @@ async def handle_password(event, user_id, password):
 
 async def complete_auth(event, user_id, client):
     """Завершает авторизацию"""
-    global user_client, chat_id
+    global user_client, chat_id, chat_created
     
     user_client = client
     me = await client.get_me()
@@ -281,52 +283,123 @@ async def complete_auth(event, user_id, client):
     )
     
     # Создаём чат для мониторинга
-    chat_id = await create_or_get_chat(client)
+    chat_created = await create_or_get_chat(client)
+    if chat_created:
+        await event.respond("✅ Чат успешно создан и настроен!")
+    else:
+        await event.respond("ℹ️ Чат уже существует, подключаюсь...")
     
     # Запускаем основной цикл
     asyncio.create_task(main_loop())
 
 # ===== СОЗДАНИЕ ЧАТА =====
 async def create_or_get_chat(client):
-    me = await client.get_me()
-    chat_name = f"МБЛ ({me.username or me.first_name})"
+    """Создаёт чат или находит существующий"""
+    global chat_id, chat_created
     
+    me = await client.get_me()
+    username = me.username or me.first_name
+    chat_name = f"МБЛ ({username})"
+    
+    # Ищем существующий чат
     async for dialog in client.iter_dialogs():
         if dialog.name == chat_name:
-            return dialog.id
+            chat_id = dialog.id
+            print(f"✅ Найден существующий чат: {chat_name} (ID: {chat_id})")
+            
+            # Проверяем есть ли IsekaiGlobal_bot в чате
+            try:
+                bot_entity = await client.get_entity(bot_username)
+                await client(AddChatUserRequest(
+                    chat_id=chat_id,
+                    user_id=bot_entity,
+                    fwd_limit=0
+                ))
+                print("✅ IsekaiGlobal_bot добавлен в чат")
+            except UserAlreadyParticipantError:
+                print("ℹ️ IsekaiGlobal_bot уже в чате")
+            except Exception as e:
+                print(f"⚠️ Ошибка при добавлении IsekaiGlobal_bot: {e}")
+            
+            # Даём админа IsekaiGlobal_bot
+            await give_admin_rights(client, chat_id)
+            return True
     
+    # Создаём новый чат
     try:
+        print(f"🔄 Создаю новый чат: {chat_name}")
+        
+        # Создаём чат и сразу добавляем IsekaiGlobal_bot
         result = await client(CreateChatRequest(
             users=[bot_username],
             title=chat_name
         ))
-        return result.chats[0].id
-    except:
-        result = await client(CreateChatRequest(
-            users=[],
-            title=chat_name
-        ))
-        chat_id = result.chats[0].id
-        await client(AddChatUserRequest(
+        
+        chat = result.chats[0]
+        chat_id = chat.id
+        print(f"✅ Чат создан: {chat_name} (ID: {chat_id})")
+        
+        # Даём админа IsekaiGlobal_bot
+        await give_admin_rights(client, chat_id)
+        
+        # Отправляем приветственное сообщение
+        await client.send_message(chat_id, "🤖 Бот для мониторинга боссов активирован!")
+        
+        return True
+        
+    except Exception as e:
+        print(f"❌ Ошибка при создании чата: {e}")
+        return False
+
+async def give_admin_rights(client, chat_id):
+    """Даёт IsekaiGlobal_bot права администратора"""
+    try:
+        bot_entity = await client.get_entity(bot_username)
+        
+        # Все права администратора
+        admin_rights = ChatAdminRights(
+            change_info=True,
+            post_messages=True,
+            edit_messages=True,
+            delete_messages=True,
+            ban_users=True,
+            invite_users=True,
+            pin_messages=True,
+            add_admins=True,
+            anonymous=False,
+            manage_call=True,
+            other=True
+        )
+        
+        # Назначаем IsekaiGlobal_bot администратором
+        await client(EditChatAdminRequest(
             chat_id=chat_id,
-            user_id=bot_username,
-            fwd_limit=0
+            user_id=bot_entity,
+            rights=admin_rights,
+            is_admin=True
         ))
-        return chat_id
+        
+        print(f"✅ {bot_username} получил права администратора")
+        
+    except Exception as e:
+        print(f"⚠️ Не удалось выдать права админа {bot_username}: {e}")
 
 # ===== МОНИТОРИНГ БОССОВ =====
 async def check_bosses():
-    global is_active, selected_bosses, chat_id, user_client
+    global is_active, selected_bosses, chat_id, user_client, chat_created
     
-    if not user_client or not is_active or not selected_bosses:
+    if not user_client or not is_active or not selected_bosses or not chat_created:
         return
     
     try:
+        # Пишем "бл" в чат
         await user_client.send_message(chat_id, "бл")
         await asyncio.sleep(2)
         
+        # Получаем последние сообщения
         messages = await user_client.get_messages(chat_id, limit=10)
         
+        # Ищем сообщение от IsekaiGlobal_bot с боссами
         boss_message = None
         bot_entity = await user_client.get_entity(bot_username)
         for msg in messages:
@@ -335,8 +408,10 @@ async def check_bosses():
                 break
         
         if not boss_message:
+            print("⚠️ Сообщение с боссами не найдено")
             return
         
+        # Парсим статусы боссов
         boss_status = {}
         for i, boss in enumerate(BOSSES):
             pattern = rf"{boss['emoji']}.*{boss['name']}.*(Жив!|\d+[мс. ]+\d*[мс.]*)"
@@ -345,6 +420,7 @@ async def check_bosses():
                 status = match.group(1)
                 boss_status[i] = status == "Жив!"
         
+        # Атакуем живых боссов
         for index in selected_bosses:
             if index in boss_status and boss_status[index]:
                 await attack_boss(index)
@@ -357,13 +433,16 @@ async def attack_boss(boss_index):
     global user_client
     
     try:
+        # Пишем "бо"
         await user_client.send_message(bot_username, "бо")
         await asyncio.sleep(1)
         
+        # Получаем сообщение от IsekaiGlobal_bot с кнопками
         messages = await user_client.get_messages(bot_username, limit=2)
         if not messages:
             return
         
+        # Ищем кнопку по индексу
         for msg in messages:
             if msg.buttons:
                 flat_buttons = [btn for row in msg.buttons for btn in row]
@@ -383,7 +462,7 @@ async def main_loop():
 # ===== ОБРАБОТКА КОМАНД С КЛАВИАТУРЫ =====
 async def handle_main_commands(event, text):
     """Обрабатывает команды с клавиатуры"""
-    global is_active, selected_bosses, chat_id, user_client
+    global is_active, selected_bosses, chat_id, user_client, chat_created
     
     # ВКЛЮЧИТЬ/ВЫКЛЮЧИТЬ
     if text in ["✅ ВКЛЮЧИТЬ", "❌ ВЫКЛЮЧИТЬ"]:
@@ -406,11 +485,12 @@ async def handle_main_commands(event, text):
     
     # СТАТУС БОССОВ
     elif text == "📊 СТАТУС БОССОВ":
+        chat_status = "✅ Создан" if chat_created else "❌ Не создан"
         await event.respond(
             f"📊 **Текущий статус:**\n"
             f"🟢 Бот: {'ВКЛЮЧЕН' if is_active else 'ВЫКЛЮЧЕН'}\n"
             f"🎯 Выбрано боссов: {len(selected_bosses)}\n"
-            f"📁 Чат: {'Создан' if chat_id else 'Не создан'}"
+            f"📁 Чат: {chat_status}"
         )
     
     # ОБНОВИТЬ
