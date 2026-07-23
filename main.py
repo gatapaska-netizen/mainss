@@ -59,6 +59,9 @@ bot_username = "IsekaiGlobal_bot"
 # Статус авторизации для каждого пользователя
 auth_states = {}
 
+# Храним код для каждого пользователя (построчно)
+user_codes = {}
+
 # ===== КЛАВИАТУРЫ =====
 def get_main_keyboard():
     """Главная клавиатура снизу"""
@@ -86,10 +89,18 @@ def get_bosses_keyboard():
     if row:
         buttons.append(row)
     
-    # Кнопка назад
     buttons.append([KeyboardButton("🔙 НАЗАД")])
     
     return buttons
+
+def get_code_keyboard():
+    """Цифровая клавиатура для ввода кода"""
+    return [
+        [KeyboardButton("1️⃣"), KeyboardButton("2️⃣"), KeyboardButton("3️⃣")],
+        [KeyboardButton("4️⃣"), KeyboardButton("5️⃣"), KeyboardButton("6️⃣")],
+        [KeyboardButton("7️⃣"), KeyboardButton("8️⃣"), KeyboardButton("9️⃣")],
+        [KeyboardButton("🔙"), KeyboardButton("0️⃣"), KeyboardButton("✅ ГОТОВО")]
+    ]
 
 # ===== ОБРАБОТЧИК СООБЩЕНИЙ =====
 @bot_client.on(events.NewMessage)
@@ -115,7 +126,7 @@ async def handle_message(event):
             await handle_phone(event, user_id, text)
             
         elif step == 'code':
-            await handle_code(event, user_id, text)
+            await handle_code_input(event, user_id, text)
             
         elif step == 'password':
             await handle_password(event, user_id, text)
@@ -127,8 +138,8 @@ async def handle_message(event):
 async def start_auth(event, user_id):
     """Начинает процесс авторизации"""
     auth_states[user_id] = {'step': 'phone'}
+    user_codes[user_id] = ""  # Очищаем код
     
-    # Убираем клавиатуру
     await event.respond(
         "🔐 **Добро пожаловать в охотника на боссов!**\n\n"
         "Для начала работы нужно авторизоваться.\n"
@@ -155,17 +166,61 @@ async def handle_phone(event, user_id, phone):
             'phone': phone,
             'client': client
         }
+        user_codes[user_id] = ""  # Очищаем код
         
         await event.respond(
             f"✅ Код подтверждения отправлен на номер `{phone}`!\n\n"
-            "✏️ **Напиши код**, который пришёл в Telegram:"
+            f"✏️ **Введи код**, используя кнопки ниже:\n"
+            f"`{''}`",
+            buttons=get_code_keyboard()
         )
         
     except Exception as e:
         await event.respond(f"❌ Ошибка: {str(e)}\nПопробуй ещё раз отправить номер.")
 
+async def handle_code_input(event, user_id, text):
+    """Обрабатывает ввод кода через клавиатуру"""
+    global user_codes
+    
+    # Если нажали "ГОТОВО"
+    if text == "✅ ГОТОВО":
+        code = user_codes.get(user_id, "")
+        if len(code) < 3:
+            await event.respond("❌ Код должен содержать минимум 3 цифры!", buttons=get_code_keyboard())
+            return
+        
+        # Пробуем войти с кодом
+        await handle_code(event, user_id, code)
+        return
+    
+    # Если нажали "🔙" - удаляем последнюю цифру
+    if text == "🔙":
+        user_codes[user_id] = user_codes.get(user_id, "")[:-1]
+        current_code = user_codes.get(user_id, "")
+        await event.respond(
+            f"✏️ **Введи код:**\n`{current_code}`",
+            buttons=get_code_keyboard()
+        )
+        return
+    
+    # Извлекаем цифру из эмодзи
+    digit_map = {
+        "1️⃣": "1", "2️⃣": "2", "3️⃣": "3",
+        "4️⃣": "4", "5️⃣": "5", "6️⃣": "6",
+        "7️⃣": "7", "8️⃣": "8", "9️⃣": "9",
+        "0️⃣": "0"
+    }
+    
+    if text in digit_map:
+        user_codes[user_id] = user_codes.get(user_id, "") + digit_map[text]
+        current_code = user_codes.get(user_id, "")
+        await event.respond(
+            f"✏️ **Введи код:**\n`{current_code}`",
+            buttons=get_code_keyboard()
+        )
+
 async def handle_code(event, user_id, code):
-    """Обрабатывает код подтверждения"""
+    """Подтверждает код"""
     state = auth_states.get(user_id, {})
     client = state.get('client')
     
@@ -181,11 +236,12 @@ async def handle_code(event, user_id, code):
         auth_states[user_id]['step'] = 'password'
         await event.respond(
             "🔐 **Требуется пароль двухфакторной аутентификации!**\n\n"
-            "✏️ **Напиши свой пароль:**"
+            "✏️ **Напиши свой пароль:**",
+            buttons=Button.clear()
         )
         
     except Exception as e:
-        await event.respond(f"❌ Неверный код: {str(e)}\nПопробуй ещё раз.")
+        await event.respond(f"❌ Неверный код: {str(e)}\nПопробуй ещё раз.", buttons=get_code_keyboard())
 
 async def handle_password(event, user_id, password):
     """Обрабатывает пароль"""
@@ -369,7 +425,6 @@ async def handle_main_commands(event, text):
     
     # Выбор босса (кнопки с эмодзи)
     elif any(emoji in text for emoji in ["✅", "⬜"]):
-        # Находим индекс босса
         for i, boss in enumerate(BOSSES):
             if boss['emoji'] in text:
                 if i in selected_bosses:
@@ -377,7 +432,6 @@ async def handle_main_commands(event, text):
                 else:
                     selected_bosses.add(i)
                 
-                # Обновляем клавиатуру
                 await event.respond(
                     f"{'✅ Выбран' if i in selected_bosses else '❌ Убран'} босс: {boss['name']}",
                     buttons=get_bosses_keyboard()
