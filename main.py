@@ -59,6 +59,8 @@ chat_id = None
 chat_created = False
 bot_username = "IsekaiGlobal_bot"
 last_attack_time = {}
+last_equip_time = 0  # Время последней экипировки
+is_equip_mode = False  # Флаг: сейчас идёт экипировка
 
 # Статус авторизации
 auth_states = {}
@@ -346,11 +348,78 @@ async def give_admin_rights(client, chat_id):
     except Exception as e:
         print(f"⚠️ Ошибка: {e}")
 
+# ===== ФУНКЦИЯ ЭКИПИРОВКИ =====
+async def do_equip():
+    """Выполняет экипировку: пишет 'экип', нажимает 8-ю кнопку (слоты), затем 6-ю"""
+    global user_client, is_equip_mode
+    
+    try:
+        print("🔄 Начинаю экипировку...")
+        is_equip_mode = True
+        
+        # 1. Пишем "экип"
+        await user_client.send_message(bot_username, "экип")
+        await asyncio.sleep(2)
+        
+        # 2. Получаем сообщение с кнопками
+        messages = await user_client.get_messages(bot_username, limit=2)
+        if not messages:
+            print("❌ Нет сообщений от бота")
+            is_equip_mode = False
+            return
+        
+        # 3. Ищем кнопку №8 (слоты) - индекс 7
+        for msg in messages:
+            if msg.buttons:
+                flat_buttons = [btn for row in msg.buttons for btn in row]
+                
+                # Нажимаем 8-ю кнопку (индекс 7)
+                if len(flat_buttons) >= 8:
+                    await msg.click(7)
+                    print("✅ Нажата 8-я кнопка (Слоты)")
+                    await asyncio.sleep(1)
+                    
+                    # 4. Получаем новое сообщение с кнопками
+                    new_messages = await user_client.get_messages(bot_username, limit=2)
+                    if new_messages:
+                        for new_msg in new_messages:
+                            if new_msg.buttons:
+                                new_buttons = [btn for row in new_msg.buttons for btn in row]
+                                
+                                # Нажимаем 6-ю кнопку (индекс 5)
+                                if len(new_buttons) >= 6:
+                                    await new_msg.click(5)
+                                    print("✅ Нажата 6-я кнопка")
+                                    await asyncio.sleep(1)
+                                    break
+                    break
+        
+        print("✅ Экипировка завершена!")
+        is_equip_mode = False
+        
+    except Exception as e:
+        print(f"❌ Ошибка экипировки: {e}")
+        is_equip_mode = False
+
 # ===== МОНИТОРИНГ БОССОВ =====
 async def check_bosses():
-    global is_active, selected_bosses, chat_id, user_client, chat_created, last_attack_time
+    global is_active, selected_bosses, chat_id, user_client, chat_created, last_attack_time, last_equip_time, is_equip_mode
     
     if not user_client or not is_active or not selected_bosses or not chat_created:
+        return
+    
+    # Проверяем, не пора ли сделать экипировку (раз в 20 минут)
+    current_time = time.time()
+    if current_time - last_equip_time >= 1200:  # 20 минут (1200 секунд)
+        print("⏰ Пора делать экипировку!")
+        await do_equip()
+        last_equip_time = current_time
+        print("⏳ Жду 1 минуту после экипировки...")
+        await asyncio.sleep(60)  # Ждём минуту после экипировки
+        return
+    
+    # Если идёт экипировка — пропускаем охоту
+    if is_equip_mode:
         return
     
     try:
@@ -374,7 +443,6 @@ async def check_bosses():
             return
         
         # 4. Парсим статусы выбранных боссов
-        current_time = time.time()
         alive_bosses = []
         
         for index in selected_bosses:
@@ -401,7 +469,6 @@ async def check_bosses():
         
         # 5. Если есть живые боссы — атакуем первого
         if alive_bosses:
-            # Берём первого живого
             boss_index = alive_bosses[0]
             boss = BOSSES[boss_index]
             
@@ -411,8 +478,6 @@ async def check_bosses():
             if success:
                 last_attack_time[boss_index] = current_time
                 print(f"✅ {boss['name']} успешно атакован! Жду 3 минуты...")
-                
-                # Ждём 3 минуты перед следующей атакой
                 await asyncio.sleep(180)  # 3 минуты
             else:
                 print(f"❌ Не удалось атаковать {boss['name']}")
@@ -428,7 +493,7 @@ async def attack_boss(boss_index):
     try:
         # 1. Пишем "бо"
         await user_client.send_message(bot_username, "бо")
-        await asyncio.sleep(2)  # Ждём ответа от бота
+        await asyncio.sleep(2)
         
         # 2. Получаем сообщение с кнопками
         messages = await user_client.get_messages(bot_username, limit=2)
@@ -439,10 +504,8 @@ async def attack_boss(boss_index):
         # 3. Ищем кнопку по индексу босса
         for msg in messages:
             if msg.buttons:
-                # Получаем все кнопки в плоский список
                 flat_buttons = [btn for row in msg.buttons for btn in row]
                 
-                # Индекс босса = номер кнопки (0 = 1-й босс, 1 = 2-й и т.д.)
                 if boss_index < len(flat_buttons):
                     await msg.click(boss_index)
                     print(f"✅ Нажата кнопка {boss_index + 1}: {flat_buttons[boss_index].text}")
