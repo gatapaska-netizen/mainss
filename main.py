@@ -12,7 +12,7 @@ BOT_TOKEN = "8695263973:AAHge3QFURlz1nOJVtGmdav5HQ2NL5-RjeI"
 API_ID = 25569323
 API_HASH = "061bad708728d3d928054f16c932de6d"
 
-# ===== СПИСОК БОССОВ (НОВЫЙ) =====
+# ===== СПИСОК БОССОВ =====
 BOSSES = [
     {"emoji": "🧚", "name": "Лесная Фея"},
     {"emoji": "🧌", "name": "Гоблин"},
@@ -56,6 +56,7 @@ chat_id = None
 chat_created = False
 current_target = None
 last_equip_time = 0
+code_buffer = ""  # Буфер для ввода кода
 bot_username = "IsekaiGlobal_bot"
 
 # ===== АВТОРИЗАЦИЯ =====
@@ -84,6 +85,7 @@ def get_bosses_keyboard():
     return buttons
 
 def get_code_keyboard():
+    """Цифровая клавиатура для ввода кода"""
     return [
         [KeyboardButton("1️⃣"), KeyboardButton("2️⃣"), KeyboardButton("3️⃣")],
         [KeyboardButton("4️⃣"), KeyboardButton("5️⃣"), KeyboardButton("6️⃣")],
@@ -94,7 +96,7 @@ def get_code_keyboard():
 # ===== ОБРАБОТЧИК СООБЩЕНИЙ =====
 @bot_client.on(events.NewMessage)
 async def handle_message(event):
-    global user_client, chat_id, chat_created, is_active, selected_bosses, current_target
+    global user_client, chat_id, chat_created, is_active, selected_bosses, current_target, code_buffer
     
     if not event.is_private:
         return
@@ -102,10 +104,12 @@ async def handle_message(event):
     text = event.raw_text
     user_id = event.sender_id
     
+    # Если уже авторизованы — обрабатываем команды
     if user_client:
         await handle_commands(event, text)
         return
     
+    # Процесс авторизации
     if text == '/start' or text == 'начать':
         await event.respond(
             "🔐 **Добро пожаловать!**\n\n"
@@ -115,13 +119,13 @@ async def handle_message(event):
         )
         return
     
+    # Обработка номера телефона
     if re.match(r'^\+?\d{10,15}$', text):
         await handle_phone(event, text)
         return
     
-    if re.match(r'^\d{3,8}$', text):
-        await handle_code(event, text)
-        return
+    # Обработка кода через клавиатуру
+    await handle_code_input(event, text)
 
 async def handle_phone(event, phone):
     global user_client
@@ -131,6 +135,7 @@ async def handle_phone(event, phone):
         client = TelegramClient(session_name, API_ID, API_HASH)
         await client.connect()
         
+        # Проверяем сохранённую сессию
         if await client.is_user_authorized():
             user_client = client
             me = await client.get_me()
@@ -139,37 +144,80 @@ async def handle_phone(event, phone):
             asyncio.create_task(main_loop())
             return
         
+        # Запрашиваем код
         await client.send_code_request(phone)
         user_client = client
+        code_buffer = ""
+        
         await event.respond(
             f"✅ Код отправлен на `{phone}`!\n\n"
-            f"✏️ Отправь код из Telegram:",
+            f"✏️ **Введи код**, используя кнопки ниже:",
             buttons=get_code_keyboard()
         )
         
     except Exception as e:
         await event.respond(f"❌ Ошибка: {e}")
 
-async def handle_code(event, code):
-    global user_client
+async def handle_code_input(event, text):
+    global user_client, code_buffer
     
     if not user_client:
         await event.respond("❌ Сначала отправь номер телефона!")
         return
     
+    # Если нажали "ГОТОВО"
+    if text == "✅ ГОТОВО":
+        if len(code_buffer) < 3:
+            await event.respond("❌ Код должен содержать минимум 3 цифры!", buttons=get_code_keyboard())
+            return
+        await handle_code(event, code_buffer)
+        return
+    
+    # Если нажали "🔙" - удаляем последнюю цифру
+    if text == "🔙":
+        code_buffer = code_buffer[:-1]
+        await event.respond(
+            f"✏️ **Введи код:**\n`{code_buffer}`",
+            buttons=get_code_keyboard()
+        )
+        return
+    
+    # Преобразуем смайлик в цифру
+    digit_map = {
+        "1️⃣": "1", "2️⃣": "2", "3️⃣": "3",
+        "4️⃣": "4", "5️⃣": "5", "6️⃣": "6",
+        "7️⃣": "7", "8️⃣": "8", "9️⃣": "9",
+        "0️⃣": "0"
+    }
+    
+    if text in digit_map:
+        code_buffer += digit_map[text]
+        await event.respond(
+            f"✏️ **Введи код:**\n`{code_buffer}`",
+            buttons=get_code_keyboard()
+        )
+
+async def handle_code(event, code):
+    global user_client, code_buffer
+    
+    if not user_client:
+        await event.respond("❌ Ошибка! Начни заново с `/start`")
+        return
+    
     try:
         await user_client.sign_in(code=code)
         me = await user_client.get_me()
+        code_buffer = ""
         await event.respond(f"✅ Успешный вход! {me.first_name}!", buttons=get_main_keyboard())
         await create_or_get_chat()
         asyncio.create_task(main_loop())
         
     except SessionPasswordNeededError:
-        await event.respond("🔐 Требуется пароль! Отправь пароль:")
+        await event.respond("🔐 Требуется пароль! Отправь пароль:", buttons=Button.clear())
         return
         
     except Exception as e:
-        await event.respond(f"❌ Неверный код: {e}")
+        await event.respond(f"❌ Неверный код: {e}", buttons=get_code_keyboard())
 
 # ===== СОЗДАНИЕ ЧАТА =====
 async def create_or_get_chat():
@@ -215,45 +263,38 @@ async def give_admin_rights(chat_id):
     except Exception as e:
         print(f"⚠️ Ошибка прав: {e}")
 
-# ===== АВТО ПОЧИНКА (ЭКИПИРОВКА) =====
+# ===== АВТО ПОЧИНКА =====
 async def do_equip():
-    """Выполняет экипировку: пишет 'экип', нажимает 8-ю кнопку (слоты), затем 6-ю"""
     global user_client
     
     try:
         print("🔧 Начинаю экипировку...")
         
-        # 1. Пишем "экип"
         await user_client.send_message(bot_username, "экип")
         print("✏️ Отправил 'экип'")
         await asyncio.sleep(1)
         
-        # 2. Получаем сообщение с кнопками
         messages = await user_client.get_messages(bot_username, limit=2)
         if not messages:
             print("❌ Нет сообщений от бота")
             return
         
-        # 3. Ищем кнопку №8 (слоты) - индекс 7
         for msg in messages:
             if msg.buttons:
                 flat_buttons = [btn for row in msg.buttons for btn in row]
                 
-                # Нажимаем 8-ю кнопку (индекс 7)
                 if len(flat_buttons) >= 8:
                     await asyncio.sleep(1)
                     await msg.click(7)
                     print("✅ Нажата 8-я кнопка (Слоты)")
                     await asyncio.sleep(1)
                     
-                    # 4. Получаем новое сообщение с кнопками
                     new_messages = await user_client.get_messages(bot_username, limit=2)
                     if new_messages:
                         for new_msg in new_messages:
                             if new_msg.buttons:
                                 new_buttons = [btn for row in new_msg.buttons for btn in row]
                                 
-                                # Нажимаем 6-ю кнопку (индекс 5)
                                 if len(new_buttons) >= 6:
                                     await asyncio.sleep(1)
                                     await new_msg.click(5)
@@ -281,7 +322,7 @@ async def main_loop():
             
             current_time = time.time()
             
-            # ===== АВТО ПОЧИНКА (раз в 20 минут) =====
+            # Авто починка (раз в 20 минут)
             if current_time - last_equip_time >= 1200:
                 print("⏰ Пора делать экипировку!")
                 await do_equip()
@@ -290,7 +331,7 @@ async def main_loop():
                 await asyncio.sleep(5)
                 continue
             
-            # ===== ОХОТА =====
+            # Охота
             await user_client.send_message(chat_id, "бл")
             print("📤 Отправлен 'бл'")
             await asyncio.sleep(2)
