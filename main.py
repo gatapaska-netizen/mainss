@@ -476,13 +476,13 @@ async def check_bosses():
     except Exception as e:
         print(f"Ошибка в check_bosses: {e}")
 
-# ===== АТАКА БОССА (С ДОБАВЛЕННЫМ "ав+") =====
+# ===== АТАКА БОССА (С ОТПРАВКОЙ "ав+" В ЧАТ МБЛ) =====
 async def attack_boss(boss_index):
     """Атакует босса по индексу (1-я кнопка = 1-й босс)"""
-    global user_client
+    global user_client, chat_id
     
     try:
-        # 1. Пишем "бо"
+        # 1. Пишем "бо" в бота
         await user_client.send_message(bot_username, "бо")
         await asyncio.sleep(2)
         
@@ -501,10 +501,10 @@ async def attack_boss(boss_index):
                     await msg.click(boss_index)
                     print(f"✅ Нажата кнопка {boss_index + 1}: {flat_buttons[boss_index].text}")
                     
-                    # 4. После нажатия кнопки отправляем "ав+"
+                    # 4. После нажатия кнопки отправляем "ав+" в чат МБЛ
                     await asyncio.sleep(1)
-                    await user_client.send_message(bot_username, "ав+")
-                    print("✅ Отправлено 'ав+'")
+                    await user_client.send_message(chat_id, "ав+")
+                    print(f"✅ Отправлено 'ав+' в чат МБЛ")
                     
                     return True
                 else:
