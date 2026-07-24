@@ -78,7 +78,8 @@ class UserData:
         self.session_name = None
         self.is_authorized = False
         self.owner_id = None
-        self.loop_running = False  # Флаг для отслеживания запущенного цикла
+        self.loop_task = None  # Храним задачу цикла
+        self.loop_running = False
 
 # Словарь для хранения данных всех пользователей
 users_data = {}
@@ -88,7 +89,6 @@ STATE_FILE = os.path.join(SESSION_DIR, 'users_state.json')
 
 # ===== СОХРАНЕНИЕ/ЗАГРУЗКА СОСТОЯНИЯ =====
 def save_users_state():
-    """Сохраняет состояние пользователей в файл"""
     try:
         state = {}
         for user_id, data in users_data.items():
@@ -106,17 +106,14 @@ def save_users_state():
             }
         with open(STATE_FILE, 'w', encoding='utf-8') as f:
             json.dump(state, f, indent=2, ensure_ascii=False)
-        print(f"💾 Состояние пользователей сохранено в {STATE_FILE}")
     except Exception as e:
         print(f"⚠️ Ошибка сохранения состояния: {e}")
 
 def load_users_state():
-    """Загружает состояние пользователей из файла"""
     try:
         if os.path.exists(STATE_FILE):
             with open(STATE_FILE, 'r', encoding='utf-8') as f:
                 state = json.load(f)
-            print(f"📂 Загружено состояние пользователей из {STATE_FILE}")
             return state
     except Exception as e:
         print(f"⚠️ Ошибка загрузки состояния: {e}")
@@ -124,20 +121,16 @@ def load_users_state():
 
 # ===== ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ =====
 def get_user_data(user_id):
-    """Получает или создаёт данные пользователя"""
     if user_id not in users_data:
         users_data[user_id] = UserData()
         users_data[user_id].owner_id = user_id
     return users_data[user_id]
 
 async def restore_user_session(user_id, phone, session_name):
-    """Восстанавливает сессию пользователя"""
     try:
         session_path = os.path.join(SESSION_DIR, session_name)
         
         if os.path.exists(f"{session_path}.session"):
-            print(f"🔄 Восстанавливаю сессию для {phone}")
-            
             client = TelegramClient(session_path, API_ID, API_HASH)
             await client.connect()
             
@@ -219,7 +212,6 @@ async def handle_message(event):
 async def start_auth(event, user_id):
     user_data = get_user_data(user_id)
     
-    # Проверяем, есть ли уже сохранённая сессия
     if user_data.is_authorized and user_data.user_client:
         try:
             await user_data.user_client.get_me()
@@ -230,8 +222,7 @@ async def start_auth(event, user_id):
                 buttons=get_main_keyboard(user_data)
             )
             # Запускаем цикл
-            if not user_data.loop_running:
-                asyncio.create_task(main_loop(user_id))
+            await start_user_loop(user_id)
             return
         except:
             user_data.is_authorized = False
@@ -279,8 +270,7 @@ async def handle_phone(event, user_id, phone):
             user_data.chat_created = await create_or_get_chat(saved_client, user_data)
             save_users_state()
             
-            if not user_data.loop_running:
-                asyncio.create_task(main_loop(user_id))
+            await start_user_loop(user_id)
             return
         
         client = TelegramClient(session_path, API_ID, API_HASH)
@@ -403,8 +393,7 @@ async def complete_auth(event, user_id, client):
     
     save_users_state()
     
-    if not user_data.loop_running:
-        asyncio.create_task(main_loop(user_id))
+    await start_user_loop(user_id)
 
 # ===== СОЗДАНИЕ ЧАТА =====
 async def create_or_get_chat(client, user_data):
@@ -547,14 +536,11 @@ async def check_bosses(user_id):
         return
     
     try:
-        # 1. Пишем "бл" в чат
         await user_data.user_client.send_message(user_data.chat_id, "бл")
         await asyncio.sleep(2)
         
-        # 2. Получаем последние сообщения
         messages = await user_data.user_client.get_messages(user_data.chat_id, limit=10)
         
-        # 3. Ищем сообщение от IsekaiGlobal_bot
         boss_message = None
         bot_entity = await user_data.user_client.get_entity(bot_username)
         for msg in messages:
@@ -566,7 +552,6 @@ async def check_bosses(user_id):
             print(f"👤 {user_id}: ⚠️ Сообщение с боссами не найдено")
             return
         
-        # 4. Если есть текущая цель — проверяем её статус
         if user_data.current_target is not None:
             boss = BOSSES[user_data.current_target]
             pattern = rf"{boss['emoji']}.*{boss['name']}.*(Жив!|\d+[мс. ]+\d*[мс.]*)"
@@ -588,7 +573,6 @@ async def check_bosses(user_id):
                 user_data.current_target = None
                 return
         
-        # 5. Нет текущей цели — ищем живого босса для атаки
         alive_bosses = []
         for index in user_data.selected_bosses:
             boss = BOSSES[index]
@@ -601,7 +585,6 @@ async def check_bosses(user_id):
                     alive_bosses.append(index)
                     print(f"👤 {user_id}: 🔥 {boss['name']} жив!")
         
-        # 6. Если есть живые боссы — атакуем первого
         if alive_bosses:
             boss_index = alive_bosses[0]
             boss = BOSSES[boss_index]
@@ -623,17 +606,14 @@ async def check_bosses(user_id):
 # ===== АТАКА БОССА =====
 async def attack_boss(user_data, boss_index):
     try:
-        # 1. Пишем "бо" в бота
         await user_data.user_client.send_message(bot_username, "бо")
         await asyncio.sleep(2)
         
-        # 2. Получаем сообщение с кнопками
         messages = await user_data.user_client.get_messages(bot_username, limit=2)
         if not messages:
             print("❌ Нет сообщений от бота")
             return False
         
-        # 3. Ищем кнопку по индексу босса
         for msg in messages:
             if msg.buttons:
                 flat_buttons = [btn for row in msg.buttons for btn in row]
@@ -642,7 +622,6 @@ async def attack_boss(user_data, boss_index):
                     await msg.click(boss_index)
                     print(f"✅ Нажата кнопка {boss_index + 1}: {flat_buttons[boss_index].text}")
                     
-                    # 4. После нажатия кнопки отправляем "ав+" в бота
                     await asyncio.sleep(1)
                     await user_data.user_client.send_message(bot_username, "ав+")
                     print(f"✅ Отправлено 'ав+' в бота")
@@ -659,24 +638,50 @@ async def attack_boss(user_data, boss_index):
         print(f"Ошибка атаки: {e}")
         return False
 
-# ===== ОСНОВНОЙ ЦИКЛ =====
+# ===== ЗАПУСК ЦИКЛА ДЛЯ ПОЛЬЗОВАТЕЛЯ =====
+async def start_user_loop(user_id):
+    """Запускает основной цикл для пользователя"""
+    user_data = get_user_data(user_id)
+    
+    # Если цикл уже запущен — ничего не делаем
+    if user_data.loop_running:
+        print(f"👤 {user_id}: Цикл уже запущен")
+        return
+    
+    # Если есть старая задача — отменяем её
+    if user_data.loop_task and not user_data.loop_task.done():
+        user_data.loop_task.cancel()
+        try:
+            await user_data.loop_task
+        except asyncio.CancelledError:
+            pass
+    
+    # Создаём новую задачу
+    print(f"👤 {user_id}: Запускаю основной цикл...")
+    user_data.loop_task = asyncio.create_task(main_loop(user_id))
+    user_data.loop_running = True
+    print(f"👤 {user_id}: ✅ Основной цикл запущен!")
+
 async def main_loop(user_id):
     """Основной цикл для пользователя"""
     user_data = get_user_data(user_id)
-    user_data.loop_running = True
-    print(f"👤 {user_id}: ✅ Основной цикл запущен!")
     
     try:
         while True:
             await check_bosses(user_id)
             await asyncio.sleep(20)
     except asyncio.CancelledError:
-        print(f"👤 {user_id}: Цикл остановлен")
+        print(f"👤 {user_id}: ⏹️ Цикл остановлен")
         user_data.loop_running = False
         raise
     except Exception as e:
-        print(f"👤 {user_id}: ❌ Ошибка в основном цикле: {e}")
+        print(f"👤 {user_id}: ❌ Ошибка в цикле: {e}")
         user_data.loop_running = False
+        # Перезапускаем цикл через 5 секунд
+        await asyncio.sleep(5)
+        if user_data.is_authorized:
+            print(f"👤 {user_id}: 🔄 Перезапускаю цикл...")
+            asyncio.create_task(start_user_loop(user_id))
 
 # ===== ОБРАБОТКА КОМАНД =====
 async def handle_main_commands(event, user_id, text):
@@ -739,7 +744,6 @@ async def handle_main_commands(event, user_id, text):
 
 # ===== ВОССТАНОВЛЕНИЕ ПОЛЬЗОВАТЕЛЕЙ =====
 async def restore_all_users():
-    """Восстанавливает всех пользователей при запуске"""
     state = load_users_state()
     restored_count = 0
     
@@ -768,12 +772,11 @@ async def restore_all_users():
                     user_data.last_equip_time = data.get('last_equip_time', 0)
                     user_data.owner_id = user_id
                     
-                    # Если чат не создан — создаём
                     if not user_data.chat_created:
                         user_data.chat_created = await create_or_get_chat(client, user_data)
                     
                     # Запускаем цикл
-                    asyncio.create_task(main_loop(user_id))
+                    await start_user_loop(user_id)
                     restored_count += 1
                     print(f"✅ Восстановлен пользователь {user_id} ({phone})")
                 else:
@@ -796,7 +799,6 @@ async def main():
     await bot_client.start(bot_token=BOT_TOKEN)
     print("✅ Бот запущен! Жду авторизации...")
     
-    # Восстанавливаем пользователей
     await restore_all_users()
     
     await bot_client.run_until_disconnected()
