@@ -77,7 +77,8 @@ class UserData:
         self.phone = None
         self.session_name = None
         self.is_authorized = False
-        self.owner_id = None  # ID владельца
+        self.owner_id = None
+        self.loop_running = False  # Флаг для отслеживания запущенного цикла
 
 # Словарь для хранения данных всех пользователей
 users_data = {}
@@ -220,7 +221,6 @@ async def start_auth(event, user_id):
     
     # Проверяем, есть ли уже сохранённая сессия
     if user_data.is_authorized and user_data.user_client:
-        # Проверяем, что клиент ещё активен
         try:
             await user_data.user_client.get_me()
             await event.respond(
@@ -230,10 +230,10 @@ async def start_auth(event, user_id):
                 buttons=get_main_keyboard(user_data)
             )
             # Запускаем цикл
-            asyncio.create_task(main_loop(user_id))
+            if not user_data.loop_running:
+                asyncio.create_task(main_loop(user_id))
             return
         except:
-            # Клиент не активен, пересоздаём
             user_data.is_authorized = False
             user_data.user_client = None
     
@@ -259,7 +259,6 @@ async def handle_phone(event, user_id, phone):
         session_name = f'user_{phone.replace("+", "")}'
         session_path = os.path.join(SESSION_DIR, session_name)
         
-        # Пробуем восстановить сессию
         saved_client = await restore_user_session(user_id, phone, session_name)
         if saved_client:
             user_data.user_client = saved_client
@@ -277,15 +276,13 @@ async def handle_phone(event, user_id, phone):
                 buttons=get_main_keyboard(user_data)
             )
             
-            # Создаём/находим чат
             user_data.chat_created = await create_or_get_chat(saved_client, user_data)
             save_users_state()
             
-            # Запускаем цикл
-            asyncio.create_task(main_loop(user_id))
+            if not user_data.loop_running:
+                asyncio.create_task(main_loop(user_id))
             return
         
-        # Если сессии нет — запрашиваем код
         client = TelegramClient(session_path, API_ID, API_HASH)
         await client.connect()
         await client.send_code_request(phone)
@@ -398,18 +395,16 @@ async def complete_auth(event, user_id, client):
         buttons=get_main_keyboard(user_data)
     )
     
-    # Создаём/находим чат
     user_data.chat_created = await create_or_get_chat(client, user_data)
     if user_data.chat_created:
         await event.respond("✅ Чат успешно создан и настроен!")
     else:
         await event.respond("ℹ️ Чат уже существует, подключаюсь...")
     
-    # Сохраняем состояние
     save_users_state()
     
-    # Запускаем цикл
-    asyncio.create_task(main_loop(user_id))
+    if not user_data.loop_running:
+        asyncio.create_task(main_loop(user_id))
 
 # ===== СОЗДАНИЕ ЧАТА =====
 async def create_or_get_chat(client, user_data):
@@ -438,7 +433,6 @@ async def create_or_get_chat(client, user_data):
                 await give_admin_rights(client, user_data.chat_id)
                 return True
         
-        # Создаём новый чат
         result = await client(CreateChatRequest(
             users=[bot_username],
             title=chat_name
@@ -669,11 +663,20 @@ async def attack_boss(user_data, boss_index):
 async def main_loop(user_id):
     """Основной цикл для пользователя"""
     user_data = get_user_data(user_id)
-    print(f"👤 {user_id}: Запущен основной цикл!")
+    user_data.loop_running = True
+    print(f"👤 {user_id}: ✅ Основной цикл запущен!")
     
-    while True:
-        await check_bosses(user_id)
-        await asyncio.sleep(20)
+    try:
+        while True:
+            await check_bosses(user_id)
+            await asyncio.sleep(20)
+    except asyncio.CancelledError:
+        print(f"👤 {user_id}: Цикл остановлен")
+        user_data.loop_running = False
+        raise
+    except Exception as e:
+        print(f"👤 {user_id}: ❌ Ошибка в основном цикле: {e}")
+        user_data.loop_running = False
 
 # ===== ОБРАБОТКА КОМАНД =====
 async def handle_main_commands(event, user_id, text):
@@ -774,7 +777,6 @@ async def restore_all_users():
                     restored_count += 1
                     print(f"✅ Восстановлен пользователь {user_id} ({phone})")
                 else:
-                    # Если сессия невалидна — сбрасываем
                     user_data.is_authorized = False
                     print(f"⚠️ Пользователь {user_id} требует повторной авторизации")
             except Exception as e:
