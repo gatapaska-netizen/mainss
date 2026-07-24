@@ -1,18 +1,25 @@
 from telethon import TelegramClient, events, Button
-from telethon.tl.types import KeyboardButton, ChatAdminRights
+from telethon.tl.types import Message, KeyboardButton, ChatAdminRights
 from telethon.tl.functions.messages import CreateChatRequest, AddChatUserRequest, EditChatAdminRequest
-from telethon.errors import SessionPasswordNeededError
+from telethon.tl.functions.channels import EditAdminRequest
+from telethon.errors import SessionPasswordNeededError, UserAlreadyParticipantError
 import asyncio
 import re
 import time
 import os
+
+# ===== СОЗДАНИЕ ПАПКИ ДЛЯ СЕССИЙ =====
+SESSION_DIR = "sessions"
+if not os.path.exists(SESSION_DIR):
+    os.makedirs(SESSION_DIR)
+    print(f"📁 Создана папка для сессий: {SESSION_DIR}")
 
 # ===== КОНФИГ =====
 BOT_TOKEN = "8695263973:AAHge3QFURlz1nOJVtGmdav5HQ2NL5-RjeI"
 API_ID = 25569323
 API_HASH = "061bad708728d3d928054f16c932de6d"
 
-# ===== НОВЫЙ СПИСОК БОССОВ (ТОЛЬКО ЭТО ИЗМЕНЕНО) =====
+# ===== НОВЫЙ СПИСОК БОССОВ (ПО ТВОЕЙ РАСКЛАДКЕ) =====
 BOSSES = [
     {"emoji": "🧚", "name": "Лесная Фея"},
     {"emoji": "🧌", "name": "Гоблин"},
@@ -48,39 +55,54 @@ BOSSES = [
     {"emoji": "🖥️", "name": "Центральный ИИ"}
 ]
 
-# ===== ПЕРЕМЕННЫЕ =====
+# Путь к сессии бота
+BOT_SESSION_PATH = os.path.join(SESSION_DIR, 'bot_session')
+
+# Клиент бота
+bot_client = TelegramClient(BOT_SESSION_PATH, API_ID, API_HASH)
+
+# Переменные
 user_client = None
 is_active = False
 selected_bosses = set()
 chat_id = None
 chat_created = False
-current_target = None
-last_equip_time = 0
-code_buffer = ""
 bot_username = "IsekaiGlobal_bot"
+last_equip_time = 0
+is_equip_mode = False
 
-# ===== БОТ =====
-bot_client = TelegramClient('bot_session', API_ID, API_HASH)
+# Текущий атакуемый босс (индекс) или None
+current_target = None
+
+# Статус авторизации
+auth_states = {}
+user_codes = {}
 
 # ===== КЛАВИАТУРЫ =====
 def get_main_keyboard():
-    toggle = "❌ ВЫКЛЮЧИТЬ" if is_active else "✅ ВКЛЮЧИТЬ"
+    global is_active
+    toggle_text = "❌ ВЫКЛЮЧИТЬ" if is_active else "✅ ВКЛЮЧИТЬ"
     return [
-        [KeyboardButton(toggle)],
+        [KeyboardButton(toggle_text)],
         [KeyboardButton("🎯 ВЫБРАТЬ БОССОВ")],
         [KeyboardButton("📊 СТАТУС БОССОВ"), KeyboardButton("🔄 ОБНОВИТЬ")]
     ]
 
 def get_bosses_keyboard():
-    buttons, row = [], []
+    buttons = []
+    row = []
+    
     for i, boss in enumerate(BOSSES):
         icon = "✅" if i in selected_bosses else "⬜"
         row.append(KeyboardButton(f"{icon} {boss['emoji']}"))
+        
         if len(row) == 4:
             buttons.append(row)
             row = []
+    
     if row:
         buttons.append(row)
+    
     buttons.append([KeyboardButton("🔙 НАЗАД")])
     return buttons
 
@@ -95,79 +117,89 @@ def get_code_keyboard():
 # ===== ОБРАБОТЧИК СООБЩЕНИЙ =====
 @bot_client.on(events.NewMessage)
 async def handle_message(event):
-    global user_client, chat_id, chat_created, is_active, selected_bosses, current_target, code_buffer
-    
-    if not event.is_private:
-        return
-    
-    text = event.raw_text
-    
-    if user_client:
-        await handle_commands(event, text)
-        return
-    
-    if text == '/start':
-        await event.respond(
-            "🔐 **Добро пожаловать!**\n\n"
-            "📱 Отправь свой номер телефона в формате:\n"
-            "`+79991234567`",
-            buttons=Button.clear()
-        )
-        return
-    
-    if re.match(r'^\+?\d{10,15}$', text):
-        await handle_phone(event, text)
-        return
-    
-    await handle_code_input(event, text)
+    if event.is_private:
+        user_id = event.sender_id
+        text = event.raw_text
+        
+        if text == '/start':
+            await start_auth(event, user_id)
+            return
+        
+        state = auth_states.get(user_id, {})
+        step = state.get('step', 'idle')
+        
+        if step == 'idle':
+            await start_auth(event, user_id)
+        elif step == 'phone':
+            await handle_phone(event, user_id, text)
+        elif step == 'code':
+            await handle_code_input(event, user_id, text)
+        elif step == 'password':
+            await handle_password(event, user_id, text)
+        elif step == 'done':
+            await handle_main_commands(event, text)
 
-async def handle_phone(event, phone):
-    global user_client
+# ===== АВТОРИЗАЦИЯ =====
+async def start_auth(event, user_id):
+    auth_states[user_id] = {'step': 'phone'}
+    user_codes[user_id] = ""
+    
+    await event.respond(
+        "🔐 **Добро пожаловать в охотника на боссов!**\n\n"
+        "Для начала работы нужно авторизоваться.\n"
+        "📱 **Отправь свой номер телефона** в формате:\n"
+        "`+79991234567`",
+        buttons=Button.clear()
+    )
+
+async def handle_phone(event, user_id, phone):
+    phone = re.sub(r'[\s\-\(\)]', '', phone)
+    
+    if not phone.startswith('+'):
+        await event.respond("❌ Неверный формат! Номер должен начинаться с `+`\nПример: `+79991234567`")
+        return
     
     try:
         session_name = f'user_{phone.replace("+", "")}'
-        client = TelegramClient(session_name, API_ID, API_HASH)
+        session_path = os.path.join(SESSION_DIR, session_name)
+        client = TelegramClient(session_path, API_ID, API_HASH)
         await client.connect()
-        
-        if await client.is_user_authorized():
-            user_client = client
-            me = await client.get_me()
-            await event.respond(f"✅ Сессия восстановлена для {me.first_name}!", buttons=get_main_keyboard())
-            await create_or_get_chat()
-            asyncio.create_task(main_loop())
-            return
-        
         await client.send_code_request(phone)
-        user_client = client
-        code_buffer = ""
+        
+        auth_states[user_id] = {
+            'step': 'code',
+            'phone': phone,
+            'client': client,
+            'session_name': session_name
+        }
+        user_codes[user_id] = ""
         
         await event.respond(
-            f"✅ Код отправлен на `{phone}`!\n\n"
+            f"✅ Код подтверждения отправлен на номер `{phone}`!\n\n"
             f"✏️ **Введи код**, используя кнопки ниже:",
             buttons=get_code_keyboard()
         )
         
     except Exception as e:
-        await event.respond(f"❌ Ошибка: {e}")
+        await event.respond(f"❌ Ошибка: {str(e)}\nПопробуй ещё раз отправить номер.")
 
-async def handle_code_input(event, text):
-    global user_client, code_buffer
-    
-    if not user_client:
-        await event.respond("❌ Сначала отправь номер телефона!")
-        return
+async def handle_code_input(event, user_id, text):
+    global user_codes
     
     if text == "✅ ГОТОВО":
-        if len(code_buffer) < 3:
+        code = user_codes.get(user_id, "")
+        if len(code) < 3:
             await event.respond("❌ Код должен содержать минимум 3 цифры!", buttons=get_code_keyboard())
             return
-        await handle_code(event, code_buffer)
+        
+        await handle_code(event, user_id, code)
         return
     
     if text == "🔙":
-        code_buffer = code_buffer[:-1]
+        user_codes[user_id] = user_codes.get(user_id, "")[:-1]
+        current_code = user_codes.get(user_id, "")
         await event.respond(
-            f"✏️ **Введи код:**\n`{code_buffer}`",
+            f"✏️ **Введи код:**\n`{current_code}`",
             buttons=get_code_keyboard()
         )
         return
@@ -180,87 +212,172 @@ async def handle_code_input(event, text):
     }
     
     if text in digit_map:
-        code_buffer += digit_map[text]
+        user_codes[user_id] = user_codes.get(user_id, "") + digit_map[text]
+        current_code = user_codes.get(user_id, "")
         await event.respond(
-            f"✏️ **Введи код:**\n`{code_buffer}`",
+            f"✏️ **Введи код:**\n`{current_code}`",
             buttons=get_code_keyboard()
         )
 
-async def handle_code(event, code):
-    global user_client
+async def handle_code(event, user_id, code):
+    state = auth_states.get(user_id, {})
+    client = state.get('client')
+    
+    if not client:
+        await event.respond("❌ Ошибка! Начни заново с `/start`")
+        return
     
     try:
-        await user_client.sign_in(code=code)
-        me = await user_client.get_me()
-        code_buffer = ""
-        await event.respond(f"✅ Успешный вход! {me.first_name}!", buttons=get_main_keyboard())
-        await create_or_get_chat()
-        asyncio.create_task(main_loop())
+        await client.sign_in(state['phone'], code)
+        await complete_auth(event, user_id, client)
         
     except SessionPasswordNeededError:
-        await event.respond("🔐 Требуется пароль! Отправь пароль:", buttons=Button.clear())
+        auth_states[user_id]['step'] = 'password'
+        await event.respond(
+            "🔐 **Требуется пароль двухфакторной аутентификации!**\n\n"
+            "✏️ **Напиши свой пароль:**",
+            buttons=Button.clear()
+        )
         
     except Exception as e:
-        await event.respond(f"❌ Неверный код: {e}", buttons=get_code_keyboard())
+        await event.respond(f"❌ Неверный код: {str(e)}\nПопробуй ещё раз.", buttons=get_code_keyboard())
 
-# ===== СОЗДАНИЕ ЧАТА =====
-async def create_or_get_chat():
-    global user_client, chat_id, chat_created
+async def handle_password(event, user_id, password):
+    state = auth_states.get(user_id, {})
+    client = state.get('client')
+    
+    if not client:
+        await event.respond("❌ Ошибка! Начни заново с `/start`")
+        return
     
     try:
-        me = await user_client.get_me()
-        chat_name = f"МБЛ ({me.username or me.first_name})"
+        await client.sign_in(password=password)
+        await complete_auth(event, user_id, client)
         
-        async for dialog in user_client.iter_dialogs():
-            if dialog.name == chat_name:
-                chat_id = dialog.id
-                chat_created = True
-                print(f"✅ Найден чат: {chat_name}")
-                await give_admin_rights(chat_id)
-                return
-        
-        result = await user_client(CreateChatRequest(
+    except Exception as e:
+        await event.respond(f"❌ Неверный пароль: {str(e)}\nПопробуй ещё раз.")
+
+async def complete_auth(event, user_id, client):
+    global user_client, chat_id, chat_created
+    
+    user_client = client
+    me = await client.get_me()
+    
+    auth_states[user_id] = {
+        'step': 'done',
+        'phone': auth_states[user_id]['phone']
+    }
+    
+    await event.respond(
+        f"✅ **Успешный вход!** \n\n"
+        f"👤 Аккаунт: {me.first_name} {me.last_name or ''}\n"
+        f"📱 Номер: {auth_states[user_id]['phone']}\n"
+        f"🆔 ID: {me.id}\n\n"
+        f"🎮 **Открываю меню управления...**",
+        buttons=get_main_keyboard()
+    )
+    
+    chat_created = await create_or_get_chat(client)
+    if chat_created:
+        await event.respond("✅ Чат успешно создан и настроен!")
+    else:
+        await event.respond("ℹ️ Чат уже существует, подключаюсь...")
+    
+    asyncio.create_task(main_loop())
+
+# ===== СОЗДАНИЕ ЧАТА =====
+async def create_or_get_chat(client):
+    global chat_id, chat_created
+    
+    me = await client.get_me()
+    username = me.username or me.first_name
+    chat_name = f"МБЛ ({username})"
+    
+    async for dialog in client.iter_dialogs():
+        if dialog.name == chat_name:
+            chat_id = dialog.id
+            print(f"✅ Найден существующий чат: {chat_name}")
+            
+            try:
+                bot_entity = await client.get_entity(bot_username)
+                await client(AddChatUserRequest(
+                    chat_id=chat_id,
+                    user_id=bot_entity,
+                    fwd_limit=0
+                ))
+            except UserAlreadyParticipantError:
+                pass
+            except Exception as e:
+                print(f"⚠️ Ошибка: {e}")
+            
+            await give_admin_rights(client, chat_id)
+            return True
+    
+    try:
+        result = await client(CreateChatRequest(
             users=[bot_username],
             title=chat_name
         ))
-        chat_id = result.chats[0].id
-        chat_created = True
+        
+        chat = result.chats[0]
+        chat_id = chat.id
         print(f"✅ Чат создан: {chat_name}")
-        await give_admin_rights(chat_id)
-        await user_client.send_message(chat_id, "🤖 Бот активирован!")
+        
+        await give_admin_rights(client, chat_id)
+        await client.send_message(chat_id, "🤖 Бот для мониторинга боссов активирован!")
+        return True
         
     except Exception as e:
-        print(f"❌ Ошибка чата: {e}")
-        chat_created = False
+        print(f"❌ Ошибка: {e}")
+        return False
 
-async def give_admin_rights(chat_id):
+async def give_admin_rights(client, chat_id):
     try:
-        bot = await user_client.get_entity(bot_username)
-        rights = ChatAdminRights(
-            change_info=True, post_messages=True, edit_messages=True,
-            delete_messages=True, ban_users=True, invite_users=True,
-            pin_messages=True, add_admins=True, anonymous=False,
-            manage_call=True, other=True
+        bot_entity = await client.get_entity(bot_username)
+        
+        admin_rights = ChatAdminRights(
+            change_info=True,
+            post_messages=True,
+            edit_messages=True,
+            delete_messages=True,
+            ban_users=True,
+            invite_users=True,
+            pin_messages=True,
+            add_admins=True,
+            anonymous=False,
+            manage_call=True,
+            other=True
         )
-        await user_client(EditChatAdminRequest(chat_id=chat_id, user_id=bot, rights=rights, is_admin=True))
-        print(f"✅ {bot_username} получил права")
+        
+        await client(EditChatAdminRequest(
+            chat_id=chat_id,
+            user_id=bot_entity,
+            rights=admin_rights,
+            is_admin=True
+        ))
+        
+        print(f"✅ {bot_username} получил права администратора")
+        
     except Exception as e:
-        print(f"⚠️ Ошибка прав: {e}")
+        print(f"⚠️ Ошибка: {e}")
 
-# ===== АВТО ПОЧИНКА =====
+# ===== ФУНКЦИЯ ЭКИПИРОВКИ (ЗАДЕРЖКИ ИЗМЕНЕНЫ НА 1 СЕКУНДУ) =====
 async def do_equip():
-    global user_client
+    """Выполняет экипировку: пишет 'экип', нажимает 8-ю кнопку (слоты), затем 6-ю"""
+    global user_client, is_equip_mode
     
     try:
-        print("🔧 Начинаю экипировку...")
+        print("🔄 Начинаю экипировку...")
+        is_equip_mode = True
         
         await user_client.send_message(bot_username, "экип")
         print("✏️ Отправил 'экип'")
-        await asyncio.sleep(1)
+        await asyncio.sleep(1)  # БЫЛО 2 → СТАЛО 1
         
         messages = await user_client.get_messages(bot_username, limit=2)
         if not messages:
             print("❌ Нет сообщений от бота")
+            is_equip_mode = False
             return
         
         for msg in messages:
@@ -268,157 +385,194 @@ async def do_equip():
                 flat_buttons = [btn for row in msg.buttons for btn in row]
                 
                 if len(flat_buttons) >= 8:
-                    await asyncio.sleep(1)
+                    await asyncio.sleep(1)  # БЫЛО 2 → СТАЛО 1
                     await msg.click(7)
                     print("✅ Нажата 8-я кнопка (Слоты)")
-                    await asyncio.sleep(1)
+                    await asyncio.sleep(1)  # БЫЛО 2 → СТАЛО 1
                     
                     new_messages = await user_client.get_messages(bot_username, limit=2)
                     if new_messages:
                         for new_msg in new_messages:
                             if new_msg.buttons:
                                 new_buttons = [btn for row in new_msg.buttons for btn in row]
+                                
                                 if len(new_buttons) >= 6:
-                                    await asyncio.sleep(1)
+                                    await asyncio.sleep(1)  # БЫЛО 2 → СТАЛО 1
                                     await new_msg.click(5)
                                     print("✅ Нажата 6-я кнопка")
-                                    await asyncio.sleep(1)
+                                    await asyncio.sleep(1)  # БЫЛО 2 → СТАЛО 1
                                     break
                     break
         
         print("✅ Экипировка завершена!")
+        is_equip_mode = False
         
     except Exception as e:
         print(f"❌ Ошибка экипировки: {e}")
+        is_equip_mode = False
 
-# ===== ОСНОВНОЙ ЦИКЛ =====
-async def main_loop():
-    global is_active, selected_bosses, chat_id, user_client, chat_created, current_target, last_equip_time
+# ===== МОНИТОРИНГ БОССОВ =====
+async def check_bosses():
+    global is_active, selected_bosses, chat_id, user_client, chat_created, last_equip_time, is_equip_mode, current_target
     
-    print("🔄 Цикл запущен!")
+    if not user_client or not is_active or not selected_bosses or not chat_created:
+        return
     
-    while True:
-        try:
-            if not user_client or not is_active or not selected_bosses or not chat_created:
-                await asyncio.sleep(20)
-                continue
+    current_time = time.time()
+    if current_time - last_equip_time >= 1200:
+        print("⏰ Пора делать экипировку!")
+        await do_equip()
+        last_equip_time = current_time
+        print("⏳ Жду 5 секунд после экипировки...")  # БЫЛО 60 → СТАЛО 5
+        await asyncio.sleep(5)  # БЫЛО 60 → СТАЛО 5
+        return
+    
+    if is_equip_mode:
+        return
+    
+    try:
+        # 1. Пишем "бл" в чат
+        await user_client.send_message(chat_id, "бл")
+        await asyncio.sleep(2)
+        
+        # 2. Получаем последние сообщения
+        messages = await user_client.get_messages(chat_id, limit=10)
+        
+        # 3. Ищем сообщение от IsekaiGlobal_bot
+        boss_message = None
+        bot_entity = await user_client.get_entity(bot_username)
+        for msg in messages:
+            if msg.sender_id == bot_entity.id:
+                boss_message = msg.text
+                break
+        
+        if not boss_message:
+            print("⚠️ Сообщение с боссами не найдено")
+            return
+        
+        # 4. Если есть текущая цель — проверяем её статус
+        if current_target is not None:
+            boss = BOSSES[current_target]
+            pattern = rf"{boss['emoji']}.*{boss['name']}.*(Жив!|\d+[мс. ]+\d*[мс.]*)"
+            match = re.search(pattern, boss_message)
             
-            current_time = time.time()
-            
-            if current_time - last_equip_time >= 1200:
-                print("⏰ Пора делать экипировку!")
-                await do_equip()
-                last_equip_time = current_time
-                print("⏳ Жду 5 секунд...")
-                await asyncio.sleep(5)
-                continue
-            
-            await user_client.send_message(chat_id, "бл")
-            print("📤 Отправлен 'бл'")
-            await asyncio.sleep(2)
-            
-            messages = await user_client.get_messages(chat_id, limit=10)
-            boss_message = None
-            bot_entity = await user_client.get_entity(bot_username)
-            
-            for msg in messages:
-                if msg.sender_id == bot_entity.id:
-                    boss_message = msg.text
-                    break
-            
-            if not boss_message:
-                await asyncio.sleep(20)
-                continue
-            
-            if current_target is not None:
-                boss = BOSSES[current_target]
-                pattern = rf"{boss['emoji']}.*{boss['name']}.*(Жив!|\d+[мс. ]+\d*[мс.]*)"
-                match = re.search(pattern, boss_message)
+            if match:
+                status = match.group(1)
+                is_alive = status == "Жив!"
                 
-                if match:
-                    status = match.group(1)
-                    if status == "Жив!":
-                        print(f"⏳ {boss['name']} ещё жив...")
-                        await asyncio.sleep(20)
-                        continue
-                    else:
-                        print(f"💀 {boss['name']} умер!")
-                        current_target = None
-                        await asyncio.sleep(20)
-                        continue
+                if is_alive:
+                    print(f"⏳ {boss['name']} ещё жив ({status}), жду смерти...")
+                    return
+                else:
+                    print(f"💀 {boss['name']} умер! Разблокирован для новой атаки!")
+                    current_target = None
+                    return
+            else:
+                print(f"⚠️ Не найден статус для {boss['name']}, разблокирую...")
+                current_target = None
+                return
+        
+        # 5. Нет текущей цели — ищем живого босса для атаки
+        alive_bosses = []
+        for index in selected_bosses:
+            boss = BOSSES[index]
+            pattern = rf"{boss['emoji']}.*{boss['name']}.*(Жив!|\d+[мс. ]+\d*[мс.]*)"
+            match = re.search(pattern, boss_message)
             
-            alive_bosses = []
-            for index in selected_bosses:
-                boss = BOSSES[index]
-                pattern = rf"{boss['emoji']}.*{boss['name']}.*(Жив!|\d+[мс. ]+\d*[мс.]*)"
-                match = re.search(pattern, boss_message)
-                
-                if match and match.group(1) == "Жив!":
+            if match:
+                status = match.group(1)
+                if status == "Жив!":
                     alive_bosses.append(index)
                     print(f"🔥 {boss['name']} жив!")
+        
+        # 6. Если есть живые боссы — атакуем первого
+        if alive_bosses:
+            boss_index = alive_bosses[0]
+            boss = BOSSES[boss_index]
             
-            if alive_bosses:
-                boss_index = alive_bosses[0]
-                boss = BOSSES[boss_index]
-                
-                print(f"⚔️ Атакую {boss['name']}...")
-                success = await attack_boss(boss_index)
-                
-                if success:
-                    current_target = boss_index
-                    print(f"✅ {boss['name']} атакован! Жду смерти...")
+            print(f"⚔️ Атакую {boss['name']}...")
+            success = await attack_boss(boss_index)
             
-            await asyncio.sleep(20)
-            
-        except Exception as e:
-            print(f"❌ Ошибка цикла: {e}")
-            await asyncio.sleep(20)
+            if success:
+                current_target = boss_index
+                print(f"✅ {boss['name']} атакован! Блокирую всех боссов до его смерти...")
+            else:
+                print(f"❌ Не удалось атаковать {boss['name']}")
+        else:
+            print("⏳ Нет живых боссов из выбранных")
+        
+    except Exception as e:
+        print(f"Ошибка в check_bosses: {e}")
 
 # ===== АТАКА БОССА =====
 async def attack_boss(boss_index):
+    """Атакует босса по индексу (1-я кнопка = 1-й босс)"""
     global user_client
     
     try:
+        # 1. Пишем "бо" в бота
         await user_client.send_message(bot_username, "бо")
         await asyncio.sleep(2)
         
+        # 2. Получаем сообщение с кнопками
         messages = await user_client.get_messages(bot_username, limit=2)
         if not messages:
+            print("❌ Нет сообщений от бота")
             return False
         
+        # 3. Ищем кнопку по индексу босса
         for msg in messages:
             if msg.buttons:
                 flat_buttons = [btn for row in msg.buttons for btn in row]
+                
                 if boss_index < len(flat_buttons):
                     await msg.click(boss_index)
-                    print(f"✅ Нажата кнопка {boss_index + 1}")
+                    print(f"✅ Нажата кнопка {boss_index + 1}: {flat_buttons[boss_index].text}")
                     
+                    # 4. После нажатия кнопки отправляем "ав+" в бота
                     await asyncio.sleep(1)
                     await user_client.send_message(bot_username, "ав+")
-                    print("✅ Отправлено 'ав+'")
+                    print(f"✅ Отправлено 'ав+' в бота")
+                    
                     return True
+                else:
+                    print(f"❌ Кнопка с индексом {boss_index} не найдена (всего {len(flat_buttons)})")
+                    return False
         
+        print("❌ Кнопки не найдены")
         return False
         
     except Exception as e:
-        print(f"❌ Ошибка атаки: {e}")
+        print(f"Ошибка атаки: {e}")
         return False
 
+# ===== ОСНОВНОЙ ЦИКЛ =====
+async def main_loop():
+    while True:
+        await check_bosses()
+        await asyncio.sleep(20)  # Проверка каждые 20 секунд
+
 # ===== ОБРАБОТКА КОМАНД =====
-async def handle_commands(event, text):
-    global is_active, selected_bosses, current_target, chat_id
+async def handle_main_commands(event, text):
+    global is_active, selected_bosses, chat_id, user_client, chat_created, current_target
     
     if text in ["✅ ВКЛЮЧИТЬ", "❌ ВЫКЛЮЧИТЬ"]:
         is_active = not is_active
+        status = "🟢 ВКЛЮЧЕН" if is_active else "🔴 ВЫКЛЮЧЕН"
         if not is_active:
             current_target = None
         await event.respond(
-            f"📊 Статус: {'🟢 ВКЛЮЧЕН' if is_active else '🔴 ВЫКЛЮЧЕН'}",
+            f"📊 Статус: {status}\n"
+            f"🎯 Выбрано боссов: {len(selected_bosses)}",
             buttons=get_main_keyboard()
         )
     
     elif text == "🎯 ВЫБРАТЬ БОССОВ":
-        await event.respond("🎯 Выбери боссов:", buttons=get_bosses_keyboard())
+        await event.respond(
+            "🎯 **Выбери боссов для охоты:**\n"
+            "✅ - выбран, ⬜ - не выбран",
+            buttons=get_bosses_keyboard()
+        )
     
     elif text == "📊 СТАТУС БОССОВ":
         chat_status = "✅ Создан" if chat_created else "❌ Не создан"
@@ -432,12 +586,12 @@ async def handle_commands(event, text):
         )
     
     elif text == "🔄 ОБНОВИТЬ":
-        await event.respond("🔄 Обновляю...")
+        await event.respond("🔄 Обновляю статус...")
         await check_bosses()
-        await event.respond("✅ Готово!")
+        await event.respond("✅ Готово! Проверь чат МБЛ")
     
     elif text == "🔙 НАЗАД":
-        await event.respond("🔙 Назад", buttons=get_main_keyboard())
+        await event.respond("🔙 Возвращаюсь в главное меню", buttons=get_main_keyboard())
     
     elif any(emoji in text for emoji in ["✅", "⬜"]):
         for i, boss in enumerate(BOSSES):
@@ -450,16 +604,18 @@ async def handle_commands(event, text):
                     selected_bosses.add(i)
                 
                 await event.respond(
-                    f"{'✅ Выбран' if i in selected_bosses else '❌ Убран'} {boss['name']}",
+                    f"{'✅ Выбран' if i in selected_bosses else '❌ Убран'} босс: {boss['name']}",
                     buttons=get_bosses_keyboard()
                 )
                 break
 
 # ===== ЗАПУСК =====
 async def main():
-    print("🚀 Запуск бота...")
+    print("🚀 Запуск бота-охотника...")
+    print(f"📁 Сессии сохраняются в папку: {SESSION_DIR}")
     await bot_client.start(bot_token=BOT_TOKEN)
-    print("✅ Бот запущен!")
+    print("✅ Бот запущен! Жду авторизации...")
+    
     await bot_client.run_until_disconnected()
 
 if __name__ == "__main__":
