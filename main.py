@@ -6,6 +6,13 @@ from telethon.errors import SessionPasswordNeededError, UserAlreadyParticipantEr
 import asyncio
 import re
 import time
+import os
+
+# ===== СОЗДАНИЕ ПАПКИ ДЛЯ СЕССИЙ =====
+SESSION_DIR = "sessions"
+if not os.path.exists(SESSION_DIR):
+    os.makedirs(SESSION_DIR)
+    print(f"📁 Создана папка для сессий: {SESSION_DIR}")
 
 # ===== КОНФИГ =====
 BOT_TOKEN = "8695263973:AAHge3QFURlz1nOJVtGmdav5HQ2NL5-RjeI"
@@ -48,8 +55,11 @@ BOSSES = [
     {"emoji": "🧊", "name": "Морозный Голем"}
 ]
 
+# Путь к сессии бота
+BOT_SESSION_PATH = os.path.join(SESSION_DIR, 'bot_session')
+
 # Клиент бота
-bot_client = TelegramClient('bot_session', API_ID, API_HASH)
+bot_client = TelegramClient(BOT_SESSION_PATH, API_ID, API_HASH)
 
 # Переменные
 user_client = None
@@ -148,8 +158,10 @@ async def handle_phone(event, user_id, phone):
         return
     
     try:
-        session_name = f'user_session_{phone.replace("+", "")}'
-        client = TelegramClient(session_name, API_ID, API_HASH)
+        # Создаём сессию в папке sessions
+        session_name = f'user_{phone.replace("+", "")}'
+        session_path = os.path.join(SESSION_DIR, session_name)
+        client = TelegramClient(session_path, API_ID, API_HASH)
         await client.connect()
         await client.send_code_request(phone)
         
@@ -578,6 +590,7 @@ async def handle_main_commands(event, text):
 # ===== ЗАПУСК =====
 async def main():
     print("🚀 Запуск бота-охотника...")
+    print(f"📁 Сессии сохраняются в папку: {SESSION_DIR}")
     await bot_client.start(bot_token=BOT_TOKEN)
     print("✅ Бот запущен! Жду авторизации...")
     
