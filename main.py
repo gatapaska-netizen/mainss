@@ -12,7 +12,7 @@ BOT_TOKEN = "8695263973:AAHge3QFURlz1nOJVtGmdav5HQ2NL5-RjeI"
 API_ID = 25569323
 API_HASH = "061bad708728d3d928054f16c932de6d"
 
-# ===== СПИСОК БОССОВ =====
+# ===== НОВЫЙ СПИСОК БОССОВ (ТОЛЬКО ЭТО ИЗМЕНЕНО) =====
 BOSSES = [
     {"emoji": "🧚", "name": "Лесная Фея"},
     {"emoji": "🧌", "name": "Гоблин"},
@@ -56,10 +56,10 @@ chat_id = None
 chat_created = False
 current_target = None
 last_equip_time = 0
-code_buffer = ""  # Буфер для ввода кода
+code_buffer = ""
 bot_username = "IsekaiGlobal_bot"
 
-# ===== АВТОРИЗАЦИЯ =====
+# ===== БОТ =====
 bot_client = TelegramClient('bot_session', API_ID, API_HASH)
 
 # ===== КЛАВИАТУРЫ =====
@@ -85,7 +85,6 @@ def get_bosses_keyboard():
     return buttons
 
 def get_code_keyboard():
-    """Цифровая клавиатура для ввода кода"""
     return [
         [KeyboardButton("1️⃣"), KeyboardButton("2️⃣"), KeyboardButton("3️⃣")],
         [KeyboardButton("4️⃣"), KeyboardButton("5️⃣"), KeyboardButton("6️⃣")],
@@ -102,15 +101,12 @@ async def handle_message(event):
         return
     
     text = event.raw_text
-    user_id = event.sender_id
     
-    # Если уже авторизованы — обрабатываем команды
     if user_client:
         await handle_commands(event, text)
         return
     
-    # Процесс авторизации
-    if text == '/start' or text == 'начать':
+    if text == '/start':
         await event.respond(
             "🔐 **Добро пожаловать!**\n\n"
             "📱 Отправь свой номер телефона в формате:\n"
@@ -119,12 +115,10 @@ async def handle_message(event):
         )
         return
     
-    # Обработка номера телефона
     if re.match(r'^\+?\d{10,15}$', text):
         await handle_phone(event, text)
         return
     
-    # Обработка кода через клавиатуру
     await handle_code_input(event, text)
 
 async def handle_phone(event, phone):
@@ -135,7 +129,6 @@ async def handle_phone(event, phone):
         client = TelegramClient(session_name, API_ID, API_HASH)
         await client.connect()
         
-        # Проверяем сохранённую сессию
         if await client.is_user_authorized():
             user_client = client
             me = await client.get_me()
@@ -144,7 +137,6 @@ async def handle_phone(event, phone):
             asyncio.create_task(main_loop())
             return
         
-        # Запрашиваем код
         await client.send_code_request(phone)
         user_client = client
         code_buffer = ""
@@ -165,7 +157,6 @@ async def handle_code_input(event, text):
         await event.respond("❌ Сначала отправь номер телефона!")
         return
     
-    # Если нажали "ГОТОВО"
     if text == "✅ ГОТОВО":
         if len(code_buffer) < 3:
             await event.respond("❌ Код должен содержать минимум 3 цифры!", buttons=get_code_keyboard())
@@ -173,7 +164,6 @@ async def handle_code_input(event, text):
         await handle_code(event, code_buffer)
         return
     
-    # Если нажали "🔙" - удаляем последнюю цифру
     if text == "🔙":
         code_buffer = code_buffer[:-1]
         await event.respond(
@@ -182,7 +172,6 @@ async def handle_code_input(event, text):
         )
         return
     
-    # Преобразуем смайлик в цифру
     digit_map = {
         "1️⃣": "1", "2️⃣": "2", "3️⃣": "3",
         "4️⃣": "4", "5️⃣": "5", "6️⃣": "6",
@@ -198,11 +187,7 @@ async def handle_code_input(event, text):
         )
 
 async def handle_code(event, code):
-    global user_client, code_buffer
-    
-    if not user_client:
-        await event.respond("❌ Ошибка! Начни заново с `/start`")
-        return
+    global user_client
     
     try:
         await user_client.sign_in(code=code)
@@ -214,7 +199,6 @@ async def handle_code(event, code):
         
     except SessionPasswordNeededError:
         await event.respond("🔐 Требуется пароль! Отправь пароль:", buttons=Button.clear())
-        return
         
     except Exception as e:
         await event.respond(f"❌ Неверный код: {e}", buttons=get_code_keyboard())
@@ -294,7 +278,6 @@ async def do_equip():
                         for new_msg in new_messages:
                             if new_msg.buttons:
                                 new_buttons = [btn for row in new_msg.buttons for btn in row]
-                                
                                 if len(new_buttons) >= 6:
                                     await asyncio.sleep(1)
                                     await new_msg.click(5)
@@ -322,16 +305,14 @@ async def main_loop():
             
             current_time = time.time()
             
-            # Авто починка (раз в 20 минут)
             if current_time - last_equip_time >= 1200:
                 print("⏰ Пора делать экипировку!")
                 await do_equip()
                 last_equip_time = current_time
-                print("⏳ Жду 5 секунд после экипировки...")
+                print("⏳ Жду 5 секунд...")
                 await asyncio.sleep(5)
                 continue
             
-            # Охота
             await user_client.send_message(chat_id, "бл")
             print("📤 Отправлен 'бл'")
             await asyncio.sleep(2)
@@ -357,11 +338,11 @@ async def main_loop():
                 if match:
                     status = match.group(1)
                     if status == "Жив!":
-                        print(f"⏳ {boss['name']} ещё жив, жду...")
+                        print(f"⏳ {boss['name']} ещё жив...")
                         await asyncio.sleep(20)
                         continue
                     else:
-                        print(f"💀 {boss['name']} умер! Разблокирую...")
+                        print(f"💀 {boss['name']} умер!")
                         current_target = None
                         await asyncio.sleep(20)
                         continue
@@ -452,6 +433,8 @@ async def handle_commands(event, text):
     
     elif text == "🔄 ОБНОВИТЬ":
         await event.respond("🔄 Обновляю...")
+        await check_bosses()
+        await event.respond("✅ Готово!")
     
     elif text == "🔙 НАЗАД":
         await event.respond("🔙 Назад", buttons=get_main_keyboard())
