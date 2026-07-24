@@ -71,9 +71,8 @@ bot_username = "IsekaiGlobal_bot"
 last_equip_time = 0
 is_equip_mode = False
 
-# Словарь для отслеживания атакованных боссов
-# {индекс: True} - босс атакован и ждём его смерти
-attacked_bosses = {}
+# Текущий атакуемый босс (индекс) или None
+current_target = None
 
 # Статус авторизации
 auth_states = {}
@@ -414,7 +413,7 @@ async def do_equip():
 
 # ===== МОНИТОРИНГ БОССОВ =====
 async def check_bosses():
-    global is_active, selected_bosses, chat_id, user_client, chat_created, last_equip_time, is_equip_mode, attacked_bosses
+    global is_active, selected_bosses, chat_id, user_client, chat_created, last_equip_time, is_equip_mode, current_target
     
     if not user_client or not is_active or not selected_bosses or not chat_created:
         return
@@ -451,11 +450,9 @@ async def check_bosses():
             print("⚠️ Сообщение с боссами не найдено")
             return
         
-        # 4. Парсим статусы выбранных боссов
-        for index in selected_bosses:
-            boss = BOSSES[index]
-            
-            # Ищем строку с боссом
+        # 4. Если есть текущая цель — проверяем её статус
+        if current_target is not None:
+            boss = BOSSES[current_target]
             pattern = rf"{boss['emoji']}.*{boss['name']}.*(Жив!|\d+[мс. ]+\d*[мс.]*)"
             match = re.search(pattern, boss_message)
             
@@ -463,29 +460,49 @@ async def check_bosses():
                 status = match.group(1)
                 is_alive = status == "Жив!"
                 
-                # Проверяем, атакован ли босс
-                is_attacked = attacked_bosses.get(index, False)
-                
                 if is_alive:
-                    if not is_attacked:
-                        # Босс жив и не атакован → АТАКУЕМ!
-                        print(f"🔥 {boss['name']} жив! Атакую...")
-                        success = await attack_boss(index)
-                        if success:
-                            attacked_bosses[index] = True
-                            print(f"✅ {boss['name']} атакован! Жду смерти...")
-                        else:
-                            print(f"❌ Не удалось атаковать {boss['name']}")
-                    else:
-                        # Босс уже атакован, ждём смерти
-                        print(f"⏳ {boss['name']} атакован, жду смерти...")
+                    # Босс ещё жив → ждём
+                    print(f"⏳ {boss['name']} ещё жив ({status}), жду смерти...")
+                    return
                 else:
-                    if is_attacked:
-                        # Босс умер! Разблокируем
-                        attacked_bosses[index] = False
-                        print(f"💀 {boss['name']} умер! Разблокирован для новой атаки!")
-                    else:
-                        print(f"⏳ {boss['name']} не жив ({status}), пропускаю")
+                    # Босс умер → разблокируем
+                    print(f"💀 {boss['name']} умер! Разблокирован для новой атаки!")
+                    current_target = None
+                    return
+            else:
+                # Не нашли босса в сообщении (может быть ошибка)
+                print(f"⚠️ Не найден статус для {boss['name']}, разблокирую...")
+                current_target = None
+                return
+        
+        # 5. Нет текущей цели — ищем живого босса для атаки
+        alive_bosses = []
+        for index in selected_bosses:
+            boss = BOSSES[index]
+            pattern = rf"{boss['emoji']}.*{boss['name']}.*(Жив!|\d+[мс. ]+\d*[мс.]*)"
+            match = re.search(pattern, boss_message)
+            
+            if match:
+                status = match.group(1)
+                if status == "Жив!":
+                    alive_bosses.append(index)
+                    print(f"🔥 {boss['name']} жив!")
+        
+        # 6. Если есть живые боссы — атакуем первого
+        if alive_bosses:
+            boss_index = alive_bosses[0]
+            boss = BOSSES[boss_index]
+            
+            print(f"⚔️ Атакую {boss['name']}...")
+            success = await attack_boss(boss_index)
+            
+            if success:
+                current_target = boss_index
+                print(f"✅ {boss['name']} атакован! Блокирую всех боссов до его смерти...")
+            else:
+                print(f"❌ Не удалось атаковать {boss['name']}")
+        else:
+            print("⏳ Нет живых боссов из выбранных")
         
     except Exception as e:
         print(f"Ошибка в check_bosses: {e}")
@@ -540,14 +557,14 @@ async def main_loop():
 
 # ===== ОБРАБОТКА КОМАНД =====
 async def handle_main_commands(event, text):
-    global is_active, selected_bosses, chat_id, user_client, chat_created, attacked_bosses
+    global is_active, selected_bosses, chat_id, user_client, chat_created, current_target
     
     if text in ["✅ ВКЛЮЧИТЬ", "❌ ВЫКЛЮЧИТЬ"]:
         is_active = not is_active
         status = "🟢 ВКЛЮЧЕН" if is_active else "🔴 ВЫКЛЮЧЕН"
         if not is_active:
-            # При выключении сбрасываем список атакованных боссов
-            attacked_bosses = {}
+            # При выключении сбрасываем цель
+            current_target = None
         await event.respond(
             f"📊 Статус: {status}\n"
             f"🎯 Выбрано боссов: {len(selected_bosses)}",
@@ -563,12 +580,12 @@ async def handle_main_commands(event, text):
     
     elif text == "📊 СТАТУС БОССОВ":
         chat_status = "✅ Создан" if chat_created else "❌ Не создан"
-        attacked_count = sum(1 for v in attacked_bosses.values() if v)
+        target_name = BOSSES[current_target]['name'] if current_target is not None else "Нет"
         await event.respond(
             f"📊 **Текущий статус:**\n"
             f"🟢 Бот: {'ВКЛЮЧЕН' if is_active else 'ВЫКЛЮЧЕН'}\n"
             f"🎯 Выбрано боссов: {len(selected_bosses)}\n"
-            f"⚔️ Атаковано боссов: {attacked_count}\n"
+            f"⚔️ Атакуется: {target_name}\n"
             f"📁 Чат: {chat_status}"
         )
     
@@ -585,8 +602,9 @@ async def handle_main_commands(event, text):
             if boss['emoji'] in text:
                 if i in selected_bosses:
                     selected_bosses.remove(i)
-                    # Если босс убран из выбора — сбрасываем его статус атаки
-                    attacked_bosses.pop(i, None)
+                    # Если босс убран из выбора и он был целью — сбрасываем
+                    if current_target == i:
+                        current_target = None
                 else:
                     selected_bosses.add(i)
                 
