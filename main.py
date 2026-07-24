@@ -15,36 +15,23 @@ if not os.path.exists(SESSION_DIR):
     print(f"📁 Создана папка для сессий: {SESSION_DIR}")
 
 # ===== КОНФИГ =====
-BOT_TOKEN = "8695263973:AAHge3QFURlz1nOJVtGmdav5HQ2NL5-RjeI"
+BOT_TOKEN = "8982270945:AAHWQUkaezlyPONPuJOWUtDNu63fcx3yvqU"
 API_ID = 25569323
 API_HASH = "061bad708728d3d928054f16c932de6d"
 
-# ===== НОВЫЙ СПИСОК БОССОВ =====
+# Список боссов (порядок = порядок кнопок в боте)
 BOSSES = [
     {"emoji": "🧚", "name": "Лесная Фея"},
     {"emoji": "🧌", "name": "Гоблин"},
     {"emoji": "🦌", "name": "Дух Рощи"},
     {"emoji": "🫎", "name": "Лесной Владыка"},
-    {"emoji": "🧛‍♀️", "name": "Ночной Вампир"},
-    {"emoji": "💀", "name": "Костяной Лорд"},
-    {"emoji": "☠️", "name": "Король Некромантов"},
-    {"emoji": "👑", "name": "Лич"},
-    {"emoji": "🐦‍🔥", "name": "Солнечный Феникс"},
-    {"emoji": "🌋", "name": "Лавовый Голем"},
     {"emoji": "👺", "name": "Тэнгу"},
-    {"emoji": "👹", "name": "Демон"},
     {"emoji": "🤖", "name": "Автоматон"},
     {"emoji": "🐸", "name": "Меха Жаба"},
     {"emoji": "🦂", "name": "Меха Скорпион"},
-    {"emoji": "🐛", "name": "Меха Червь"},
-    {"emoji": "❄️", "name": "Ледяной Элементаль"},
-    {"emoji": "👻", "name": "Призрак"},
-    {"emoji": "🌩", "name": "Громовой Страж"},
-    {"emoji": "🧊", "name": "Морозный Голем"},
     {"emoji": "🐊", "name": "Крокодил"},
     {"emoji": "🐲", "name": "Дракон"},
     {"emoji": "🐢", "name": "Черепаха"},
-    {"emoji": "🦕", "name": "Зауропод"},
     {"emoji": "🐙", "name": "Кракен"},
     {"emoji": "🦈", "name": "Глубинная Акула"},
     {"emoji": "🐳", "name": "Кит"},
@@ -52,7 +39,20 @@ BOSSES = [
     {"emoji": "👁", "name": "Страж Портала"},
     {"emoji": "📡", "name": "Хранитель Сигнала"},
     {"emoji": "🛸", "name": "Повелитель Машин"},
-    {"emoji": "🖥️", "name": "Центральный ИИ"}
+    {"emoji": "🖥️", "name": "Центральный ИИ"},
+    {"emoji": "🐦‍🔥", "name": "Солнечный Феникс"},
+    {"emoji": "💀", "name": "Костяной Лорд"},
+    {"emoji": "🧛‍♀️", "name": "Ночной Вампир"},
+    {"emoji": "☠️", "name": "Король Некромантов"},
+    {"emoji": "👑", "name": "Лич"},
+    {"emoji": "❄️", "name": "Ледяной Элементаль"},
+    {"emoji": "🌋", "name": "Лавовый Голем"},
+    {"emoji": "👹", "name": "Демон"},
+    {"emoji": "🦕", "name": "Зауропод"},
+    {"emoji": "🐛", "name": "Меха Червь"},
+    {"emoji": "👻", "name": "Призрак"},
+    {"emoji": "🌩", "name": "Громовой Страж"},
+    {"emoji": "🧊", "name": "Морозный Голем"}
 ]
 
 # Путь к сессии бота
@@ -70,6 +70,8 @@ chat_created = False
 bot_username = "IsekaiGlobal_bot"
 last_equip_time = 0
 is_equip_mode = False
+
+# Текущий атакуемый босс (индекс) или None
 current_target = None
 
 # Статус авторизации
@@ -119,13 +121,8 @@ async def handle_message(event):
         user_id = event.sender_id
         text = event.raw_text
         
-        # /start обрабатываем ВСЕГДА ПЕРВЫМ
         if text == '/start':
             await start_auth(event, user_id)
-            return
-        
-        if user_client:
-            await handle_main_commands(event, text)
             return
         
         state = auth_states.get(user_id, {})
@@ -366,6 +363,7 @@ async def give_admin_rights(client, chat_id):
 
 # ===== ФУНКЦИЯ ЭКИПИРОВКИ =====
 async def do_equip():
+    """Выполняет экипировку: пишет 'экип', нажимает 8-ю кнопку (слоты), затем 6-ю"""
     global user_client, is_equip_mode
     
     try:
@@ -374,7 +372,7 @@ async def do_equip():
         
         await user_client.send_message(bot_username, "экип")
         print("✏️ Отправил 'экип'")
-        await asyncio.sleep(1)
+        await asyncio.sleep(2)
         
         messages = await user_client.get_messages(bot_username, limit=2)
         if not messages:
@@ -387,10 +385,10 @@ async def do_equip():
                 flat_buttons = [btn for row in msg.buttons for btn in row]
                 
                 if len(flat_buttons) >= 8:
-                    await asyncio.sleep(1)
+                    await asyncio.sleep(2)
                     await msg.click(7)
                     print("✅ Нажата 8-я кнопка (Слоты)")
-                    await asyncio.sleep(1)
+                    await asyncio.sleep(2)
                     
                     new_messages = await user_client.get_messages(bot_username, limit=2)
                     if new_messages:
@@ -399,10 +397,10 @@ async def do_equip():
                                 new_buttons = [btn for row in new_msg.buttons for btn in row]
                                 
                                 if len(new_buttons) >= 6:
-                                    await asyncio.sleep(1)
+                                    await asyncio.sleep(2)
                                     await new_msg.click(5)
                                     print("✅ Нажата 6-я кнопка")
-                                    await asyncio.sleep(1)
+                                    await asyncio.sleep(2)
                                     break
                     break
         
@@ -425,19 +423,22 @@ async def check_bosses():
         print("⏰ Пора делать экипировку!")
         await do_equip()
         last_equip_time = current_time
-        print("⏳ Жду 5 секунд после экипировки...")
-        await asyncio.sleep(5)
+        print("⏳ Жду 1 минуту после экипировки...")
+        await asyncio.sleep(60)
         return
     
     if is_equip_mode:
         return
     
     try:
+        # 1. Пишем "бл" в чат
         await user_client.send_message(chat_id, "бл")
         await asyncio.sleep(2)
         
+        # 2. Получаем последние сообщения
         messages = await user_client.get_messages(chat_id, limit=10)
         
+        # 3. Ищем сообщение от IsekaiGlobal_bot
         boss_message = None
         bot_entity = await user_client.get_entity(bot_username)
         for msg in messages:
@@ -449,6 +450,7 @@ async def check_bosses():
             print("⚠️ Сообщение с боссами не найдено")
             return
         
+        # 4. Если есть текущая цель — проверяем её статус
         if current_target is not None:
             boss = BOSSES[current_target]
             pattern = rf"{boss['emoji']}.*{boss['name']}.*(Жив!|\d+[мс. ]+\d*[мс.]*)"
@@ -459,17 +461,21 @@ async def check_bosses():
                 is_alive = status == "Жив!"
                 
                 if is_alive:
+                    # Босс ещё жив → ждём
                     print(f"⏳ {boss['name']} ещё жив ({status}), жду смерти...")
                     return
                 else:
+                    # Босс умер → разблокируем
                     print(f"💀 {boss['name']} умер! Разблокирован для новой атаки!")
                     current_target = None
                     return
             else:
+                # Не нашли босса в сообщении (может быть ошибка)
                 print(f"⚠️ Не найден статус для {boss['name']}, разблокирую...")
                 current_target = None
                 return
         
+        # 5. Нет текущей цели — ищем живого босса для атаки
         alive_bosses = []
         for index in selected_bosses:
             boss = BOSSES[index]
@@ -482,6 +488,7 @@ async def check_bosses():
                     alive_bosses.append(index)
                     print(f"🔥 {boss['name']} жив!")
         
+        # 6. Если есть живые боссы — атакуем первого
         if alive_bosses:
             boss_index = alive_bosses[0]
             boss = BOSSES[boss_index]
@@ -502,17 +509,21 @@ async def check_bosses():
 
 # ===== АТАКА БОССА =====
 async def attack_boss(boss_index):
+    """Атакует босса по индексу (1-я кнопка = 1-й босс)"""
     global user_client
     
     try:
+        # 1. Пишем "бо" в бота
         await user_client.send_message(bot_username, "бо")
         await asyncio.sleep(2)
         
+        # 2. Получаем сообщение с кнопками
         messages = await user_client.get_messages(bot_username, limit=2)
         if not messages:
             print("❌ Нет сообщений от бота")
             return False
         
+        # 3. Ищем кнопку по индексу босса
         for msg in messages:
             if msg.buttons:
                 flat_buttons = [btn for row in msg.buttons for btn in row]
@@ -521,6 +532,7 @@ async def attack_boss(boss_index):
                     await msg.click(boss_index)
                     print(f"✅ Нажата кнопка {boss_index + 1}: {flat_buttons[boss_index].text}")
                     
+                    # 4. После нажатия кнопки отправляем "ав+" в бота
                     await asyncio.sleep(1)
                     await user_client.send_message(bot_username, "ав+")
                     print(f"✅ Отправлено 'ав+' в бота")
@@ -541,7 +553,7 @@ async def attack_boss(boss_index):
 async def main_loop():
     while True:
         await check_bosses()
-        await asyncio.sleep(20)
+        await asyncio.sleep(20)  # Проверка каждые 20 секунд
 
 # ===== ОБРАБОТКА КОМАНД =====
 async def handle_main_commands(event, text):
@@ -551,6 +563,7 @@ async def handle_main_commands(event, text):
         is_active = not is_active
         status = "🟢 ВКЛЮЧЕН" if is_active else "🔴 ВЫКЛЮЧЕН"
         if not is_active:
+            # При выключении сбрасываем цель
             current_target = None
         await event.respond(
             f"📊 Статус: {status}\n"
@@ -589,6 +602,7 @@ async def handle_main_commands(event, text):
             if boss['emoji'] in text:
                 if i in selected_bosses:
                     selected_bosses.remove(i)
+                    # Если босс убран из выбора и он был целью — сбрасываем
                     if current_target == i:
                         current_target = None
                 else:
@@ -611,3 +625,4 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+    
