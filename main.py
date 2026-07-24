@@ -7,6 +7,7 @@ import asyncio
 import re
 import time
 import os
+import json
 
 # ===== СОЗДАНИЕ ПАПКИ ДЛЯ СЕССИЙ =====
 SESSION_DIR = "sessions"
@@ -80,9 +81,51 @@ class UserData:
         self.current_target = None
         self.last_equip_time = 0
         self.is_equip_mode = False
+        self.auth_step = 'idle'
+        self.phone = None
+        self.session_name = None
+        self.is_authorized = False  # Флаг авторизации
 
 # Словарь для хранения данных всех пользователей
 users_data = {}
+
+# Файл для сохранения состояния пользователей
+STATE_FILE = os.path.join(SESSION_DIR, 'users_state.json')
+
+# ===== СОХРАНЕНИЕ/ЗАГРУЗКА СОСТОЯНИЯ =====
+def save_users_state():
+    """Сохраняет состояние пользователей в файл"""
+    try:
+        state = {}
+        for user_id, data in users_data.items():
+            state[str(user_id)] = {
+                'phone': data.phone,
+                'session_name': data.session_name,
+                'is_authorized': data.is_authorized,
+                'selected_bosses': list(data.selected_bosses),
+                'is_active': data.is_active,
+                'chat_id': data.chat_id,
+                'chat_created': data.chat_created,
+                'current_target': data.current_target,
+                'last_equip_time': data.last_equip_time
+            }
+        with open(STATE_FILE, 'w', encoding='utf-8') as f:
+            json.dump(state, f, indent=2, ensure_ascii=False)
+        print(f"💾 Состояние пользователей сохранено в {STATE_FILE}")
+    except Exception as e:
+        print(f"⚠️ Ошибка сохранения состояния: {e}")
+
+def load_users_state():
+    """Загружает состояние пользователей из файла"""
+    try:
+        if os.path.exists(STATE_FILE):
+            with open(STATE_FILE, 'r', encoding='utf-8') as f:
+                state = json.load(f)
+            print(f"📂 Загружено состояние пользователей из {STATE_FILE}")
+            return state
+    except Exception as e:
+        print(f"⚠️ Ошибка загрузки состояния: {e}")
+    return {}
 
 # ===== ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ =====
 def get_user_data(user_id):
@@ -90,6 +133,33 @@ def get_user_data(user_id):
     if user_id not in users_data:
         users_data[user_id] = UserData()
     return users_data[user_id]
+
+async def restore_user_session(user_id, phone, session_name):
+    """Восстанавливает сессию пользователя"""
+    try:
+        session_path = os.path.join(SESSION_DIR, session_name)
+        
+        # Проверяем, существует ли файл сессии
+        if os.path.exists(f"{session_path}.session"):
+            print(f"🔄 Восстанавливаю сессию для {phone}")
+            
+            client = TelegramClient(session_path, API_ID, API_HASH)
+            await client.connect()
+            
+            # Проверяем, авторизован ли клиент
+            if await client.is_user_authorized():
+                me = await client.get_me()
+                print(f"✅ Сессия восстановлена для {me.first_name} ({phone})")
+                return client
+            else:
+                print(f"⚠️ Сессия для {phone} недействительна")
+                return None
+        else:
+            print(f"ℹ️ Файл сессии для {phone} не найден")
+            return None
+    except Exception as e:
+        print(f"❌ Ошибка восстановления сессии: {e}")
+        return None
 
 # ===== КЛАВИАТУРЫ =====
 def get_main_keyboard(user_data):
@@ -139,22 +209,35 @@ async def handle_message(event):
             return
         
         # Проверяем состояние авторизации
-        state = user_data.__dict__.get('auth_step', 'idle')
+        step = user_data.auth_step
         
-        if state == 'idle':
+        if step == 'idle' or step == 'start':
             await start_auth(event, user_id)
-        elif state == 'phone':
+        elif step == 'phone':
             await handle_phone(event, user_id, text)
-        elif state == 'code':
+        elif step == 'code':
             await handle_code_input(event, user_id, text)
-        elif state == 'password':
+        elif step == 'password':
             await handle_password(event, user_id, text)
-        elif state == 'done':
+        elif step == 'done':
             await handle_main_commands(event, user_id, text)
 
 # ===== АВТОРИЗАЦИЯ =====
 async def start_auth(event, user_id):
     user_data = get_user_data(user_id)
+    
+    # Проверяем, есть ли уже сохранённая сессия
+    if user_data.is_authorized and user_data.user_client:
+        await event.respond(
+            f"✅ Вы уже авторизованы!\n"
+            f"📱 Номер: {user_data.phone}\n\n"
+            f"🎮 Открываю меню управления...",
+            buttons=get_main_keyboard(user_data)
+        )
+        # Запускаем цикл
+        asyncio.create_task(main_loop(user_id))
+        return
+    
     user_data.auth_step = 'phone'
     
     await event.respond(
@@ -174,8 +257,34 @@ async def handle_phone(event, user_id, phone):
         return
     
     try:
+        # Проверяем, есть ли сохранённая сессия
         session_name = f'user_{phone.replace("+", "")}'
         session_path = os.path.join(SESSION_DIR, session_name)
+        
+        # Пробуем восстановить сессию
+        saved_client = await restore_user_session(user_id, phone, session_name)
+        if saved_client:
+            user_data.user_client = saved_client
+            user_data.phone = phone
+            user_data.session_name = session_name
+            user_data.is_authorized = True
+            user_data.auth_step = 'done'
+            
+            me = await saved_client.get_me()
+            await event.respond(
+                f"✅ **Сессия восстановлена!** \n\n"
+                f"👤 Аккаунт: {me.first_name} {me.last_name or ''}\n"
+                f"📱 Номер: {phone}\n\n"
+                f"🎮 **Открываю меню управления...**",
+                buttons=get_main_keyboard(user_data)
+            )
+            
+            user_data.chat_created = await create_or_get_chat(saved_client, user_data)
+            save_users_state()
+            asyncio.create_task(main_loop(user_id))
+            return
+        
+        # Если сессии нет — запрашиваем код
         client = TelegramClient(session_path, API_ID, API_HASH)
         await client.connect()
         await client.send_code_request(phone)
@@ -274,6 +383,7 @@ async def complete_auth(event, user_id, client):
     user_data = get_user_data(user_id)
     
     user_data.user_client = client
+    user_data.is_authorized = True
     me = await client.get_me()
     
     user_data.auth_step = 'done'
@@ -292,6 +402,9 @@ async def complete_auth(event, user_id, client):
         await event.respond("✅ Чат успешно создан и настроен!")
     else:
         await event.respond("ℹ️ Чат уже существует, подключаюсь...")
+    
+    # Сохраняем состояние
+    save_users_state()
     
     # Запускаем цикл для этого пользователя
     asyncio.create_task(main_loop(user_id))
@@ -573,6 +686,7 @@ async def handle_main_commands(event, user_id, text):
             f"🎯 Выбрано боссов: {len(user_data.selected_bosses)}",
             buttons=get_main_keyboard(user_data)
         )
+        save_users_state()
     
     elif text == "🎯 ВЫБРАТЬ БОССОВ":
         await event.respond(
@@ -614,15 +728,63 @@ async def handle_main_commands(event, user_id, text):
                     f"{'✅ Выбран' if i in user_data.selected_bosses else '❌ Убран'} босс: {boss['name']}",
                     buttons=get_bosses_keyboard(user_data)
                 )
+                save_users_state()
                 break
+
+# ===== ЗАГРУЗКА СОСТОЯНИЯ ПРИ СТАРТЕ =====
+async def restore_all_users():
+    """Восстанавливает всех пользователей при запуске"""
+    state = load_users_state()
+    restored_count = 0
+    
+    for user_id_str, data in state.items():
+        user_id = int(user_id_str)
+        user_data = get_user_data(user_id)
+        
+        phone = data.get('phone')
+        session_name = data.get('session_name')
+        is_authorized = data.get('is_authorized', False)
+        
+        if phone and session_name and is_authorized:
+            try:
+                client = await restore_user_session(user_id, phone, session_name)
+                if client:
+                    user_data.user_client = client
+                    user_data.phone = phone
+                    user_data.session_name = session_name
+                    user_data.is_authorized = True
+                    user_data.auth_step = 'done'
+                    user_data.selected_bosses = set(data.get('selected_bosses', []))
+                    user_data.is_active = data.get('is_active', False)
+                    user_data.chat_id = data.get('chat_id')
+                    user_data.chat_created = data.get('chat_created', False)
+                    user_data.current_target = data.get('current_target')
+                    user_data.last_equip_time = data.get('last_equip_time', 0)
+                    
+                    # Запускаем цикл
+                    asyncio.create_task(main_loop(user_id))
+                    restored_count += 1
+                    print(f"✅ Восстановлен пользователь {user_id} ({phone})")
+            except Exception as e:
+                print(f"❌ Ошибка восстановления пользователя {user_id}: {e}")
+    
+    if restored_count > 0:
+        print(f"✅ Восстановлено {restored_count} пользователей")
+    else:
+        print("ℹ️ Нет сохранённых пользователей для восстановления")
 
 # ===== ЗАПУСК =====
 async def main():
     print("🚀 Запуск бота-охотника...")
     print(f"📁 Сессии сохраняются в папку: {SESSION_DIR}")
     print("👥 Поддерживается несколько пользователей одновременно!")
+    
+    # Запускаем бота
     await bot_client.start(bot_token=BOT_TOKEN)
     print("✅ Бот запущен! Жду авторизации...")
+    
+    # Восстанавливаем пользователей
+    await restore_all_users()
     
     await bot_client.run_until_disconnected()
 
