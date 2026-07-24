@@ -22,42 +22,34 @@ API_HASH = "061bad708728d3d928054f16c932de6d"
 
 # Список боссов (порядок = порядок кнопок в боте)
 BOSSES = [
-    # Ряд 1
     {"emoji": "🧚", "name": "Лесная Фея"},
     {"emoji": "🧌", "name": "Гоблин"},
     {"emoji": "🦌", "name": "Дух Рощи"},
     {"emoji": "🫎", "name": "Лесной Владыка"},
-    # Ряд 2
     {"emoji": "🧛‍♀️", "name": "Ночной Вампир"},
     {"emoji": "💀", "name": "Костяной Лорд"},
     {"emoji": "☠️", "name": "Король Некромантов"},
     {"emoji": "👑", "name": "Лич"},
-    # Ряд 3
     {"emoji": "🐦‍🔥", "name": "Солнечный Феникс"},
     {"emoji": "🌋", "name": "Лавовый Голем"},
     {"emoji": "👺", "name": "Тэнгу"},
     {"emoji": "👹", "name": "Демон"},
-    # Ряд 4
     {"emoji": "🤖", "name": "Автоматон"},
     {"emoji": "🐸", "name": "Меха Жаба"},
     {"emoji": "🦂", "name": "Меха Скорпион"},
     {"emoji": "🐛", "name": "Меха Червь"},
-    # Ряд 5
     {"emoji": "❄️", "name": "Ледяной Элементаль"},
     {"emoji": "👻", "name": "Призрак"},
     {"emoji": "🌩", "name": "Громовой Страж"},
     {"emoji": "🧊", "name": "Морозный Голем"},
-    # Ряд 6
     {"emoji": "🐊", "name": "Крокодил"},
     {"emoji": "🐲", "name": "Дракон"},
     {"emoji": "🐢", "name": "Черепаха"},
     {"emoji": "🦕", "name": "Зауропод"},
-    # Ряд 7
     {"emoji": "🐙", "name": "Кракен"},
     {"emoji": "🦈", "name": "Глубинная Акула"},
     {"emoji": "🐳", "name": "Кит"},
     {"emoji": "🦀", "name": "Король Рифов"},
-    # Ряд 8
     {"emoji": "👁", "name": "Страж Портала"},
     {"emoji": "📡", "name": "Хранитель Сигнала"},
     {"emoji": "🛸", "name": "Повелитель Машин"},
@@ -84,7 +76,8 @@ class UserData:
         self.auth_step = 'idle'
         self.phone = None
         self.session_name = None
-        self.is_authorized = False  # Флаг авторизации
+        self.is_authorized = False
+        self.owner_id = None  # ID владельца
 
 # Словарь для хранения данных всех пользователей
 users_data = {}
@@ -107,7 +100,8 @@ def save_users_state():
                 'chat_id': data.chat_id,
                 'chat_created': data.chat_created,
                 'current_target': data.current_target,
-                'last_equip_time': data.last_equip_time
+                'last_equip_time': data.last_equip_time,
+                'owner_id': data.owner_id
             }
         with open(STATE_FILE, 'w', encoding='utf-8') as f:
             json.dump(state, f, indent=2, ensure_ascii=False)
@@ -132,6 +126,7 @@ def get_user_data(user_id):
     """Получает или создаёт данные пользователя"""
     if user_id not in users_data:
         users_data[user_id] = UserData()
+        users_data[user_id].owner_id = user_id
     return users_data[user_id]
 
 async def restore_user_session(user_id, phone, session_name):
@@ -139,14 +134,12 @@ async def restore_user_session(user_id, phone, session_name):
     try:
         session_path = os.path.join(SESSION_DIR, session_name)
         
-        # Проверяем, существует ли файл сессии
         if os.path.exists(f"{session_path}.session"):
             print(f"🔄 Восстанавливаю сессию для {phone}")
             
             client = TelegramClient(session_path, API_ID, API_HASH)
             await client.connect()
             
-            # Проверяем, авторизован ли клиент
             if await client.is_user_authorized():
                 me = await client.get_me()
                 print(f"✅ Сессия восстановлена для {me.first_name} ({phone})")
@@ -208,7 +201,6 @@ async def handle_message(event):
             await start_auth(event, user_id)
             return
         
-        # Проверяем состояние авторизации
         step = user_data.auth_step
         
         if step == 'idle' or step == 'start':
@@ -228,15 +220,22 @@ async def start_auth(event, user_id):
     
     # Проверяем, есть ли уже сохранённая сессия
     if user_data.is_authorized and user_data.user_client:
-        await event.respond(
-            f"✅ Вы уже авторизованы!\n"
-            f"📱 Номер: {user_data.phone}\n\n"
-            f"🎮 Открываю меню управления...",
-            buttons=get_main_keyboard(user_data)
-        )
-        # Запускаем цикл
-        asyncio.create_task(main_loop(user_id))
-        return
+        # Проверяем, что клиент ещё активен
+        try:
+            await user_data.user_client.get_me()
+            await event.respond(
+                f"✅ Вы уже авторизованы!\n"
+                f"📱 Номер: {user_data.phone}\n\n"
+                f"🎮 Открываю меню управления...",
+                buttons=get_main_keyboard(user_data)
+            )
+            # Запускаем цикл
+            asyncio.create_task(main_loop(user_id))
+            return
+        except:
+            # Клиент не активен, пересоздаём
+            user_data.is_authorized = False
+            user_data.user_client = None
     
     user_data.auth_step = 'phone'
     
@@ -257,7 +256,6 @@ async def handle_phone(event, user_id, phone):
         return
     
     try:
-        # Проверяем, есть ли сохранённая сессия
         session_name = f'user_{phone.replace("+", "")}'
         session_path = os.path.join(SESSION_DIR, session_name)
         
@@ -279,8 +277,11 @@ async def handle_phone(event, user_id, phone):
                 buttons=get_main_keyboard(user_data)
             )
             
+            # Создаём/находим чат
             user_data.chat_created = await create_or_get_chat(saved_client, user_data)
             save_users_state()
+            
+            # Запускаем цикл
             asyncio.create_task(main_loop(user_id))
             return
         
@@ -397,6 +398,7 @@ async def complete_auth(event, user_id, client):
         buttons=get_main_keyboard(user_data)
     )
     
+    # Создаём/находим чат
     user_data.chat_created = await create_or_get_chat(client, user_data)
     if user_data.chat_created:
         await event.respond("✅ Чат успешно создан и настроен!")
@@ -406,38 +408,37 @@ async def complete_auth(event, user_id, client):
     # Сохраняем состояние
     save_users_state()
     
-    # Запускаем цикл для этого пользователя
+    # Запускаем цикл
     asyncio.create_task(main_loop(user_id))
 
 # ===== СОЗДАНИЕ ЧАТА =====
 async def create_or_get_chat(client, user_data):
-    global chat_id
-    
-    me = await client.get_me()
-    username = me.username or me.first_name
-    chat_name = f"МБЛ ({username})"
-    
-    async for dialog in client.iter_dialogs():
-        if dialog.name == chat_name:
-            user_data.chat_id = dialog.id
-            print(f"✅ Найден существующий чат: {chat_name}")
-            
-            try:
-                bot_entity = await client.get_entity(bot_username)
-                await client(AddChatUserRequest(
-                    chat_id=user_data.chat_id,
-                    user_id=bot_entity,
-                    fwd_limit=0
-                ))
-            except UserAlreadyParticipantError:
-                pass
-            except Exception as e:
-                print(f"⚠️ Ошибка: {e}")
-            
-            await give_admin_rights(client, user_data.chat_id)
-            return True
-    
     try:
+        me = await client.get_me()
+        username = me.username or me.first_name
+        chat_name = f"МБЛ ({username})"
+        
+        async for dialog in client.iter_dialogs():
+            if dialog.name == chat_name:
+                user_data.chat_id = dialog.id
+                print(f"✅ Найден существующий чат: {chat_name}")
+                
+                try:
+                    bot_entity = await client.get_entity(bot_username)
+                    await client(AddChatUserRequest(
+                        chat_id=user_data.chat_id,
+                        user_id=bot_entity,
+                        fwd_limit=0
+                    ))
+                except UserAlreadyParticipantError:
+                    pass
+                except Exception as e:
+                    print(f"⚠️ Ошибка: {e}")
+                
+                await give_admin_rights(client, user_data.chat_id)
+                return True
+        
+        # Создаём новый чат
         result = await client(CreateChatRequest(
             users=[bot_username],
             title=chat_name
@@ -452,7 +453,7 @@ async def create_or_get_chat(client, user_data):
         return True
         
     except Exception as e:
-        print(f"❌ Ошибка: {e}")
+        print(f"❌ Ошибка создания чата: {e}")
         return False
 
 async def give_admin_rights(client, chat_id):
@@ -483,11 +484,10 @@ async def give_admin_rights(client, chat_id):
         print(f"✅ {bot_username} получил права администратора")
         
     except Exception as e:
-        print(f"⚠️ Ошибка: {e}")
+        print(f"⚠️ Ошибка выдачи прав: {e}")
 
 # ===== ФУНКЦИЯ ЭКИПИРОВКИ =====
 async def do_equip(user_data):
-    """Выполняет экипировку"""
     try:
         print("🔄 Начинаю экипировку...")
         user_data.is_equip_mode = True
@@ -628,7 +628,6 @@ async def check_bosses(user_id):
 
 # ===== АТАКА БОССА =====
 async def attack_boss(user_data, boss_index):
-    """Атакует босса по индексу"""
     try:
         # 1. Пишем "бо" в бота
         await user_data.user_client.send_message(bot_username, "бо")
@@ -668,6 +667,10 @@ async def attack_boss(user_data, boss_index):
 
 # ===== ОСНОВНОЙ ЦИКЛ =====
 async def main_loop(user_id):
+    """Основной цикл для пользователя"""
+    user_data = get_user_data(user_id)
+    print(f"👤 {user_id}: Запущен основной цикл!")
+    
     while True:
         await check_bosses(user_id)
         await asyncio.sleep(20)
@@ -731,7 +734,7 @@ async def handle_main_commands(event, user_id, text):
                 save_users_state()
                 break
 
-# ===== ЗАГРУЗКА СОСТОЯНИЯ ПРИ СТАРТЕ =====
+# ===== ВОССТАНОВЛЕНИЕ ПОЛЬЗОВАТЕЛЕЙ =====
 async def restore_all_users():
     """Восстанавливает всех пользователей при запуске"""
     state = load_users_state()
@@ -760,11 +763,20 @@ async def restore_all_users():
                     user_data.chat_created = data.get('chat_created', False)
                     user_data.current_target = data.get('current_target')
                     user_data.last_equip_time = data.get('last_equip_time', 0)
+                    user_data.owner_id = user_id
+                    
+                    # Если чат не создан — создаём
+                    if not user_data.chat_created:
+                        user_data.chat_created = await create_or_get_chat(client, user_data)
                     
                     # Запускаем цикл
                     asyncio.create_task(main_loop(user_id))
                     restored_count += 1
                     print(f"✅ Восстановлен пользователь {user_id} ({phone})")
+                else:
+                    # Если сессия невалидна — сбрасываем
+                    user_data.is_authorized = False
+                    print(f"⚠️ Пользователь {user_id} требует повторной авторизации")
             except Exception as e:
                 print(f"❌ Ошибка восстановления пользователя {user_id}: {e}")
     
@@ -779,7 +791,6 @@ async def main():
     print(f"📁 Сессии сохраняются в папку: {SESSION_DIR}")
     print("👥 Поддерживается несколько пользователей одновременно!")
     
-    # Запускаем бота
     await bot_client.start(bot_token=BOT_TOKEN)
     print("✅ Бот запущен! Жду авторизации...")
     
