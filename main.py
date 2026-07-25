@@ -21,6 +21,7 @@ API_HASH = "061bad708728d3d928054f16c932de6d"
 
 # ID бота IsekaiGlobal_bot
 BOT_ID = 5522271758  # ID бота IsekaiGlobal_bot
+BOT_USERNAME = "IsekaiGlobal_bot"  # Юзернейм для чата
 
 # Список боссов (порядок = порядок кнопок в боте)
 BOSSES = [
@@ -73,7 +74,6 @@ is_active = False
 selected_bosses = set()
 chat_id = None
 chat_created = False
-bot_username = "IsekaiGlobal_bot"
 last_equip_time = 0
 is_equip_mode = False
 
@@ -322,7 +322,7 @@ async def create_or_get_chat(client):
             print(f"✅ Найден существующий чат: {chat_name}")
             
             try:
-                bot_entity = await client.get_entity(bot_username)
+                bot_entity = await client.get_entity(BOT_USERNAME)
                 await client(AddChatUserRequest(
                     chat_id=chat_id,
                     user_id=bot_entity,
@@ -338,7 +338,7 @@ async def create_or_get_chat(client):
     
     try:
         result = await client(CreateChatRequest(
-            users=[bot_username],
+            users=[BOT_USERNAME],
             title=chat_name
         ))
         
@@ -356,7 +356,7 @@ async def create_or_get_chat(client):
 
 async def give_admin_rights(client, chat_id):
     try:
-        bot_entity = await client.get_entity(bot_username)
+        bot_entity = await client.get_entity(BOT_USERNAME)
         
         admin_rights = ChatAdminRights(
             change_info=True,
@@ -379,7 +379,7 @@ async def give_admin_rights(client, chat_id):
             is_admin=True
         ))
         
-        print(f"✅ {bot_username} получил права администратора")
+        print(f"✅ {BOT_USERNAME} получил права администратора")
         
     except Exception as e:
         print(f"⚠️ Ошибка: {e}")
@@ -465,11 +465,11 @@ async def do_equip():
         print("🔄 Начинаю экипировку...")
         is_equip_mode = True
         
-        await user_client.send_message(bot_username, "экип")
+        await user_client.send_message(BOT_USERNAME, "экип")
         print("✏️ Отправил 'экип'")
         await asyncio.sleep(1)
         
-        messages = await user_client.get_messages(bot_username, limit=2)
+        messages = await user_client.get_messages(BOT_USERNAME, limit=2)
         if not messages:
             print("❌ Нет сообщений от бота")
             is_equip_mode = False
@@ -485,7 +485,7 @@ async def do_equip():
                     print("✅ Нажата 8-я кнопка (Слоты)")
                     await asyncio.sleep(1)
                     
-                    new_messages = await user_client.get_messages(bot_username, limit=2)
+                    new_messages = await user_client.get_messages(BOT_USERNAME, limit=2)
                     if new_messages:
                         for new_msg in new_messages:
                             if new_msg.buttons:
@@ -763,7 +763,7 @@ async def dm_attack_worker(boss_index, interval_sec):
     
     while dm_attack_running and attack_count < max_attempts:
         try:
-            # Получаем последние сообщения от бота
+            # Получаем последние сообщения от бота по ID
             recent_messages = await user_client.get_messages(BOT_ID, limit=5)
             
             found_action = False
@@ -887,12 +887,12 @@ async def start_dm_attack(boss_index):
         return False
     
     try:
-        # Отправляем "бо" в ЛС боту
+        # Отправляем "бо" в ЛС боту по ID
         await user_client.send_message(BOT_ID, "бо")
-        print("✏️ Отправил 'бо' в ЛС боту")
+        print("✏️ Отправил 'бо' в ЛС боту @IsekaiGlobal_bot")
         await asyncio.sleep(2)
         
-        # Получаем сообщение с кнопками боссов
+        # Получаем сообщение с кнопками боссов от бота по ID
         messages = await user_client.get_messages(BOT_ID, limit=3)
         if not messages:
             print("❌ Нет сообщений от бота")
@@ -991,7 +991,7 @@ async def check_bosses():
         
         # Ищем сообщение от бота
         boss_message = None
-        bot_entity = await user_client.get_entity(bot_username)
+        bot_entity = await user_client.get_entity(BOT_USERNAME)
         for msg in messages:
             if msg.sender_id == bot_entity.id:
                 boss_message = msg.text
@@ -1041,7 +1041,7 @@ async def check_bosses():
             boss_index = alive_bosses[0]
             boss = BOSSES[boss_index]
             
-            print(f"⚔️ Запускаю DM-атаку на {boss['name']} в ЛС...")
+            print(f"⚔️ Запускаю DM-атаку на {boss['name']} в ЛС @IsekaiGlobal_bot...")
             success = await start_dm_attack(boss_index)
             
             if success:
@@ -1117,7 +1117,7 @@ async def handle_main_commands(event, text):
     elif text == "🔄 ОБНОВИТЬ":
         await event.respond("🔄 Обновляю статус...")
         await check_bosses()
-        await event.respond("✅ Готово! Проверь ЛС с ботом")
+        await event.respond("✅ Готово! Проверь ЛС с @IsekaiGlobal_bot")
     
     elif text == "🔙 НАЗАД":
         await event.respond("🔙 Возвращаюсь в главное меню", buttons=get_main_keyboard())
@@ -1144,6 +1144,7 @@ async def handle_main_commands(event, text):
 async def main():
     print("🚀 Запуск бота-охотника...")
     print(f"📁 Сессии сохраняются в папку: {SESSION_DIR}")
+    print(f"🤖 Работаем с ботом: @{BOT_USERNAME} (ID: {BOT_ID})")
     await bot_client.start(bot_token=BOT_TOKEN)
     print("✅ Бот запущен! Жду авторизации...")
     
