@@ -23,34 +23,34 @@ BOT_USERNAME = "IsekaiGlobal_bot"
 BOT_ID = None
 
 BOSSES = [
-    {"emoji": "🧚", "name": "Лесная Фея", "critical_health": 20},
-    {"emoji": "🧌", "name": "Гоблин", "critical_health": 20},
-    {"emoji": "🦌", "name": "Дух Рощи", "critical_health": 20},
-    {"emoji": "🫎", "name": "Лесной Владыка", "critical_health": 20},
-    {"emoji": "🧛‍♀️", "name": "Ночной Вампир", "critical_health": 30},
-    {"emoji": "💀", "name": "Костяной Лорд", "critical_health": 30},
-    {"emoji": "☠️", "name": "Король Некромантов", "critical_health": 30},
-    {"emoji": "👑", "name": "Лич", "critical_health": 30},
-    {"emoji": "🐦‍🔥", "name": "Солнечный Феникс", "critical_health": 40},
-    {"emoji": "🌋", "name": "Лавовый Голем", "critical_health": 40},
-    {"emoji": "👺", "name": "Тэнгу", "critical_health": 40},
-    {"emoji": "👹", "name": "Демон", "critical_health": 40},
-    {"emoji": "🤖", "name": "Автоматон", "critical_health": 60},
-    {"emoji": "🐸", "name": "Меха Жаба", "critical_health": 60},
-    {"emoji": "🦂", "name": "Меха Скорпион", "critical_health": 60},
-    {"emoji": "🐛", "name": "Меха Червь", "critical_health": 60},
-    {"emoji": "❄️", "name": "Ледяной Элементаль", "critical_health": 60},
-    {"emoji": "👻", "name": "Призрак", "critical_health": 60},
-    {"emoji": "🌩", "name": "Громовой Страж", "critical_health": 60},
-    {"emoji": "🧊", "name": "Морозный Голем", "critical_health": 60},
-    {"emoji": "🐊", "name": "Крокодил", "critical_health": 60},
-    {"emoji": "🐲", "name": "Дракон", "critical_health": 60},
-    {"emoji": "🐢", "name": "Черепаха", "critical_health": 60},
-    {"emoji": "🦕", "name": "Зауропод", "critical_health": 60},
-    {"emoji": "🐙", "name": "Кракен", "critical_health": 60},
-    {"emoji": "🦈", "name": "Глубинная Акула", "critical_health": 60},
-    {"emoji": "🐳", "name": "Кит", "critical_health": 60},
-    {"emoji": "🦀", "name": "Король Рифов", "critical_health": 60}
+    {"emoji": "🧚", "name": "Лесная Фея"},
+    {"emoji": "🧌", "name": "Гоблин"},
+    {"emoji": "🦌", "name": "Дух Рощи"},
+    {"emoji": "🫎", "name": "Лесной Владыка"},
+    {"emoji": "🧛‍♀️", "name": "Ночной Вампир"},
+    {"emoji": "💀", "name": "Костяной Лорд"},
+    {"emoji": "☠️", "name": "Король Некромантов"},
+    {"emoji": "👑", "name": "Лич"},
+    {"emoji": "🐦‍🔥", "name": "Солнечный Феникс"},
+    {"emoji": "🌋", "name": "Лавовый Голем"},
+    {"emoji": "👺", "name": "Тэнгу"},
+    {"emoji": "👹", "name": "Демон"},
+    {"emoji": "🤖", "name": "Автоматон"},
+    {"emoji": "🐸", "name": "Меха Жаба"},
+    {"emoji": "🦂", "name": "Меха Скорпион"},
+    {"emoji": "🐛", "name": "Меха Червь"},
+    {"emoji": "❄️", "name": "Ледяной Элементаль"},
+    {"emoji": "👻", "name": "Призрак"},
+    {"emoji": "🌩", "name": "Громовой Страж"},
+    {"emoji": "🧊", "name": "Морозный Голем"},
+    {"emoji": "🐊", "name": "Крокодил"},
+    {"emoji": "🐲", "name": "Дракон"},
+    {"emoji": "🐢", "name": "Черепаха"},
+    {"emoji": "🦕", "name": "Зауропод"},
+    {"emoji": "🐙", "name": "Кракен"},
+    {"emoji": "🦈", "name": "Глубинная Акула"},
+    {"emoji": "🐳", "name": "Кит"},
+    {"emoji": "🦀", "name": "Король Рифов"}
 ]
 
 BOT_SESSION_PATH = os.path.join(SESSION_DIR, 'bot_session')
@@ -74,10 +74,9 @@ last_activity_check = 0
 ACTIVITY_CHECK_INTERVAL = 60
 
 # Для атаки
-attack_running = False
+is_attacking = False
 attack_task = None
-heal_mode = False
-last_attack_time = 0
+attack_message_id = None
 
 # ===== ФУНКЦИЯ ПОЛУЧЕНИЯ ID БОТА =====
 async def get_bot_id():
@@ -150,140 +149,93 @@ async def handle_message(event):
         elif step == 'done':
             await handle_main_commands(event, text)
 
-# ===== ПРОСТОЙ ВАТЧЕР ДЛЯ СООБЩЕНИЙ ОТ БОТА =====
+# ===== ВАТЧЕР ДЛЯ СООБЩЕНИЙ ОТ БОТА =====
 @bot_client.on(events.NewMessage)
-async def watcher(event):
+async def watcher_new(event):
     """Следит за новыми сообщениями от бота"""
-    global attack_running
-    
     if not event.message or not event.message.text:
         return
     
-    # Если это сообщение от IsekaiGlobal_bot в ЛС
-    if event.message.chat_id == BOT_ID and attack_running:
-        print(f"📩 Получено сообщение от бота")
-        await handle_bot_message(event.message)
+    if event.message.chat_id == BOT_ID:
+        print(f"📩 Новое сообщение от бота (ID: {event.message.id})")
+        if is_attacking:
+            await check_and_click(event.message)
 
 @bot_client.on(events.MessageEdited)
 async def watcher_edit(event):
     """Следит за изменениями сообщений от бота"""
-    global attack_running
-    
     if not event.message or not event.message.text:
         return
     
-    # Если это сообщение от IsekaiGlobal_bot в ЛС
-    if event.message.chat_id == BOT_ID and attack_running:
-        print(f"✏️ Изменено сообщение от бота")
-        await handle_bot_message(event.message)
+    if event.message.chat_id == BOT_ID:
+        print(f"✏️ Изменено сообщение от бота (ID: {event.message.id})")
+        if is_attacking:
+            await check_and_click(event.message)
 
-# ===== ОБРАБОТКА СООБЩЕНИЯ ОТ БОТА =====
-async def handle_bot_message(message):
-    """Обрабатывает сообщение от бота - нажимает кнопку если нужно"""
-    global heal_mode, last_attack_time
+# ===== ПРОВЕРКА И НАЖАТИЕ КНОПКИ =====
+async def check_and_click(message):
+    """Проверяет наличие 💕 и нажимает кнопку"""
+    global is_attacking, current_target
     
-    try:
-        text = message.text or ""
-        
-        # Проверяем наличие кнопок
-        if not message.buttons:
-            print("❌ Нет кнопок в сообщении")
-            return
-        
-        print(f"📝 Текст: {text[:100]}...")
-        
-        # Проверяем победу
-        if "повержен" in text.lower() or "убил" in text.lower():
-            print("🏆 ПОБЕДА! Забираем награду...")
+    if not message or not message.text:
+        return
+    
+    text = message.text
+    
+    # Проверяем победу
+    if "повержен" in text.lower() or "убил" in text.lower():
+        print("🏆 ПОБЕДА! Забираем награду...")
+        if message.buttons:
             try:
                 await message.click(0)
                 print("✅ Награда забрана!")
-                # Останавливаем атаку
-                global attack_running
-                attack_running = False
+                is_attacking = False
+                current_target = None
                 if attack_task:
                     attack_task.cancel()
                 return
             except Exception as e:
                 print(f"⚠️ Ошибка забора награды: {e}")
                 return
-        
-        # Проверяем наличие "Босс:" и "Ты:" - значит это бой
-        if "Босс:" in text and "Ты:" in text:
-            print("⚔️ Обнаружен бой!")
-            
-            # Проверяем здоровье игрока
-            player_health = None
-            health_match = re.search(r'Ты\s*:\s*([\d,]+\.?\d*[K]?)\s*/\s*[\d,]+\.?\d*[K]?', text, re.IGNORECASE)
-            if health_match:
-                health_str = health_match.group(1).replace(',', '')
-                if 'K' in health_str.upper():
-                    health_str = health_str.upper().replace('K', '')
-                    player_health = float(health_str) * 1000
-                else:
-                    player_health = float(health_str)
-                print(f"❤️ Твоё здоровье: {player_health}")
-            
-            # Проверяем критическое здоровье
-            if current_target is not None and player_health is not None:
-                boss = BOSSES[current_target]
-                critical = boss.get('critical_health', 60)
-                if player_health < critical:
-                    if not heal_mode:
-                        print(f"⚠️ КРИТИЧЕСКОЕ ЗДОРОВЬЕ! {player_health} < {critical}")
-                        heal_mode = True
-                else:
-                    if heal_mode:
-                        print(f"✅ Здоровье восстановлено!")
-                        heal_mode = False
-            
-            # Нажимаем кнопку
-            await click_button(message)
-        
-    except Exception as e:
-        print(f"⚠️ Ошибка обработки сообщения: {e}")
-
-# ===== НАЖАТИЕ КНОПКИ =====
-async def click_button(message):
-    """Нажимает нужную кнопку в сообщении"""
-    global heal_mode, last_attack_time
     
-    try:
-        current_time = time.time()
-        
-        # Проверяем кд - не чаще 1 раза в секунду
-        if current_time - last_attack_time < 1:
-            return
-        
-        if heal_mode:
-            # Ищем кнопку "Обновить"
-            for row in message.buttons:
-                for btn in row:
-                    if "Обновить" in btn.text or "🟢" in btn.text:
-                        print("🔄 Нажимаю ОБНОВИТЬ (лечение)")
-                        await message.click(btn)
-                        last_attack_time = current_time
-                        return
-        else:
-            # Ищем кнопку "Атаковать"
-            for row in message.buttons:
-                for btn in row:
-                    if "Атаковать" in btn.text:
-                        print("⚔️ Нажимаю АТАКОВАТЬ")
-                        await message.click(btn)
-                        last_attack_time = current_time
-                        return
-            
-            # Если не нашли "Атаковать", пробуем первую кнопку
+    # Проверяем наличие 💕
+    if "💕" in text:
+        print("💕 Найден смайлик 💕 - нажимаю кнопку")
+        if message.buttons:
             try:
-                print("⚔️ Нажимаю первую кнопку")
                 await message.click(0)
-                last_attack_time = current_time
+                print("✅ Нажата первая кнопка")
             except Exception as e:
                 print(f"⚠️ Ошибка нажатия: {e}")
-                
-    except Exception as e:
-        print(f"⚠️ Ошибка нажатия кнопки: {e}")
+    else:
+        print("❌ Нет 💕 в сообщении - атака завершена!")
+        is_attacking = False
+        current_target = None
+        if attack_task:
+            attack_task.cancel()
+
+# ===== ФУНКЦИЯ АТАКИ =====
+async def attack_loop():
+    """Цикл атаки - каждую секунду проверяет сообщение"""
+    global is_attacking, attack_message_id
+    
+    while is_attacking:
+        try:
+            if attack_message_id:
+                # Получаем сообщение по ID
+                msg = await user_client.get_messages(BOT_ID, ids=attack_message_id)
+                if msg:
+                    await check_and_click(msg)
+                else:
+                    print("⚠️ Сообщение не найдено, завершаю атаку")
+                    is_attacking = False
+                    break
+            
+            await asyncio.sleep(1)
+            
+        except Exception as e:
+            print(f"⚠️ Ошибка в цикле атаки: {e}")
+            await asyncio.sleep(1)
 
 # ===== АВТОРИЗАЦИЯ =====
 async def start_auth(event, user_id):
@@ -574,9 +526,9 @@ async def do_equip():
 # ===== ЗАПУСК АТАКИ =====
 async def start_attack(boss_index):
     """Запускает атаку на босса"""
-    global attack_running, attack_task, heal_mode, user_client, BOT_ID
+    global is_attacking, attack_task, attack_message_id, user_client, BOT_ID, current_target
     
-    if attack_running:
+    if is_attacking:
         print("⚠️ Атака уже запущена")
         return False
     
@@ -613,10 +565,19 @@ async def start_attack(boss_index):
             print(f"❌ Кнопка с индексом {boss_index} не найдена")
             return False
         
+        # Ждём появления сообщения с 💕
+        await asyncio.sleep(2)
+        
+        # Получаем последнее сообщение от бота
+        last_msg = await user_client.get_messages(BOT_ID, limit=1)
+        if last_msg and last_msg[0]:
+            attack_message_id = last_msg[0].id
+            print(f"✅ Сохранён ID сообщения: {attack_message_id}")
+        
         # Запускаем атаку
-        heal_mode = False
-        attack_running = True
-        print("✅ Атака запущена! Ожидаю сообщения от бота...")
+        is_attacking = True
+        attack_task = asyncio.create_task(attack_loop())
+        print("✅ Атака запущена! Ожидаю 💕 в сообщении...")
         return True
         
     except Exception as e:
@@ -625,8 +586,8 @@ async def start_attack(boss_index):
 
 # ===== ОСТАНОВКА АТАКИ =====
 async def stop_attack():
-    global attack_running, attack_task
-    attack_running = False
+    global is_attacking, attack_task
+    is_attacking = False
     if attack_task and not attack_task.done():
         try:
             attack_task.cancel()
@@ -637,7 +598,7 @@ async def stop_attack():
 
 # ===== МОНИТОРИНГ БОССОВ =====
 async def check_bosses():
-    global is_active, selected_bosses, chat_id, user_client, chat_created, last_equip_time, is_equip_mode, current_target, reconnect_attempts, last_activity_check, attack_running, BOT_ID
+    global is_active, selected_bosses, chat_id, user_client, chat_created, last_equip_time, is_equip_mode, current_target, reconnect_attempts, last_activity_check, is_attacking, BOT_ID
     
     if not user_client:
         return
@@ -653,7 +614,7 @@ async def check_bosses():
             else:
                 return
     
-    if attack_running:
+    if is_attacking:
         return
     
     if not is_active or not selected_bosses or not chat_created:
@@ -750,14 +711,14 @@ async def main_loop():
 
 # ===== ОБРАБОТКА КОМАНД =====
 async def handle_main_commands(event, text):
-    global is_active, selected_bosses, current_target, attack_running
+    global is_active, selected_bosses, current_target, is_attacking
     
     if text in ["✅ ВКЛЮЧИТЬ", "❌ ВЫКЛЮЧИТЬ"]:
         is_active = not is_active
         status = "🟢 ВКЛЮЧЕН" if is_active else "🔴 ВЫКЛЮЧЕН"
         if not is_active:
             current_target = None
-            if attack_running:
+            if is_attacking:
                 await stop_attack()
         await event.respond(
             f"📊 Статус: {status}\n🎯 Выбрано боссов: {len(selected_bosses)}",
@@ -773,7 +734,7 @@ async def handle_main_commands(event, text):
     elif text == "📊 СТАТУС БОССОВ":
         chat_status = "✅ Создан" if chat_created else "❌ Не создан"
         target_name = BOSSES[current_target]['name'] if current_target is not None else "Нет"
-        attack_status = "🟢 Активна" if attack_running else "🔴 Неактивна"
+        attack_status = "🟢 Активна" if is_attacking else "🔴 Неактивна"
         bot_id_status = f"✅ {BOT_ID}" if BOT_ID else "❌ Не получен"
         await event.respond(
             f"📊 **Текущий статус:**\n"
@@ -801,7 +762,7 @@ async def handle_main_commands(event, text):
                     selected_bosses.remove(i)
                     if current_target == i:
                         current_target = None
-                        if attack_running:
+                        if is_attacking:
                             await stop_attack()
                 else:
                     selected_bosses.add(i)
