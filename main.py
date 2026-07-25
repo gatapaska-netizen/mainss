@@ -19,9 +19,9 @@ BOT_TOKEN = "8982270945:AAHWQUkaezlyPONPuJOWUtDNu63fcx3yvqU"
 API_ID = 25569323
 API_HASH = "061bad708728d3d928054f16c932de6d"
 
-# ID бота IsekaiGlobal_bot
-BOT_ID = 5522271758  # ID бота IsekaiGlobal_bot
-BOT_USERNAME = "IsekaiGlobal_bot"  # Юзернейм для чата
+# Имя бота IsekaiGlobal_bot (будем получать ID динамически)
+BOT_USERNAME = "IsekaiGlobal_bot"
+BOT_ID = None  # Будет получен при запуске
 
 # Список боссов (порядок = порядок кнопок в боте)
 BOSSES = [
@@ -97,6 +97,24 @@ dm_attack_running = False
 dm_battle_msg_id = None
 heal_mode = False
 heal_interval = 2.0
+
+# ===== ФУНКЦИЯ ПОЛУЧЕНИЯ ID БОТА =====
+async def get_bot_id():
+    """Получает ID бота @IsekaiGlobal_bot"""
+    global BOT_ID, user_client
+    
+    if not user_client:
+        print("❌ Нет клиента для получения ID бота")
+        return None
+    
+    try:
+        bot_entity = await user_client.get_entity(BOT_USERNAME)
+        BOT_ID = bot_entity.id
+        print(f"✅ Найден бот @{BOT_USERNAME} с ID: {BOT_ID}")
+        return BOT_ID
+    except Exception as e:
+        print(f"❌ Ошибка получения ID бота: {e}")
+        return None
 
 # ===== КЛАВИАТУРЫ =====
 def get_main_keyboard():
@@ -278,7 +296,7 @@ async def handle_password(event, user_id, password):
         await event.respond(f"❌ Неверный пароль: {str(e)}\nПопробуй ещё раз.")
 
 async def complete_auth(event, user_id, client):
-    global user_client, chat_id, chat_created, reconnect_attempts, last_activity_check
+    global user_client, chat_id, chat_created, reconnect_attempts, last_activity_check, BOT_ID
     
     user_client = client
     me = await client.get_me()
@@ -291,11 +309,15 @@ async def complete_auth(event, user_id, client):
     reconnect_attempts = 0
     last_activity_check = time.time()
     
+    # Получаем ID бота @IsekaiGlobal_bot
+    await get_bot_id()
+    
     await event.respond(
         f"✅ **Успешный вход!** \n\n"
         f"👤 Аккаунт: {me.first_name} {me.last_name or ''}\n"
         f"📱 Номер: {auth_states[user_id]['phone']}\n"
-        f"🆔 ID: {me.id}\n\n"
+        f"🆔 ID: {me.id}\n"
+        f"🤖 Бот @{BOT_USERNAME} ID: {BOT_ID}\n\n"
         f"🎮 **Открываю меню управления...**",
         buttons=get_main_keyboard()
     )
@@ -466,7 +488,7 @@ async def do_equip():
         is_equip_mode = True
         
         await user_client.send_message(BOT_USERNAME, "экип")
-        print("✏️ Отправил 'экип'")
+        print("✏️ Отправил 'экип' в @IsekaiGlobal_bot")
         await asyncio.sleep(1)
         
         messages = await user_client.get_messages(BOT_USERNAME, limit=2)
@@ -506,11 +528,10 @@ async def do_equip():
         print(f"❌ Ошибка экипировки: {e}")
         is_equip_mode = False
 
-# ===== ПАРСИНГ ЗДОРОВЬЯ (ОБНОВЛЁННЫЙ ПОД ФОРМАТ ИЗ СКРИНА) =====
+# ===== ПАРСИНГ ЗДОРОВЬЯ =====
 def parse_player_health(message_text):
     """Парсит здоровье игрока из сообщения"""
     try:
-        # Формат: "❤️ Ты : 968 / 968 ОЗ (+13❤️/3с)"
         patterns = [
             r'❤️\s*Ты\s*:\s*([\d,]+\.?\d*[K]?)\s*/\s*[\d,]+\.?\d*[K]?\s*ОЗ',
             r'❤️\s*Ты\s*([\d,]+\.?\d*[K]?)\s*/\s*[\d,]+\.?\d*[K]?\s*ОЗ',
@@ -535,7 +556,6 @@ def parse_player_health(message_text):
 def parse_boss_health(message_text):
     """Парсит здоровье босса из сообщения"""
     try:
-        # Формат: "❤️ Босс : 11.11K / 11.30K ОЗ (+1❤️/3с)"
         patterns = [
             r'❤️\s*Босс\s*:\s*([\d,]+\.?\d*[K]?)\s*/\s*[\d,]+\.?\d*[K]?\s*ОЗ',
             r'❤️\s*Босс\s*([\d,]+\.?\d*[K]?)\s*/\s*[\d,]+\.?\d*[K]?\s*ОЗ',
@@ -560,22 +580,18 @@ def parse_boss_health(message_text):
 def parse_boss_name(message_text):
     """Парсит имя босса из сообщения"""
     try:
-        # Имя босса в самом начале сообщения
         lines = message_text.strip().split('\n')
         if lines:
             first_line = lines[0].strip()
-            # Если первая строка не содержит эмодзи и не пустая
             if first_line and not any(emoji in first_line for emoji in ['❤️', '⚔️', '✘', '✔️', '🟢']):
-                # Очищаем от лишних символов
                 name = re.sub(r'[^\w\s-]', '', first_line).strip()
                 if name and len(name) > 1:
                     return name.lower()
         
-        # Альтернативный поиск: после "❤️ Босс :" или в конце сообщения
         patterns = [
-            r'❤️\s*Босс\s*:\s*([^\n]+)',  # Ищем после "Босс :"
-            r'✘\s*([^\n]+)\s*промахнулся',  # Ищем перед "промахнулся"
-            r'🎯\s*\(босс\)\s*([^\n]+)',  # Старый формат
+            r'❤️\s*Босс\s*:\s*([^\n]+)',
+            r'✘\s*([^\n]+)\s*промахнулся',
+            r'🎯\s*\(босс\)\s*([^\n]+)',
         ]
         
         for pattern in patterns:
@@ -595,7 +611,6 @@ def parse_boss_name(message_text):
 def parse_damage(message_text):
     """Парсит урон из сообщения"""
     try:
-        # Формат: "✘ Ты бьёшь на ✘107 урона" или "✘ Ты бьёшь на 107 урона"
         patterns = [
             r'✘\s*Ты бьёшь на\s*✘([\d,]+\.?\d*)\s*урона',
             r'Ты бьёшь на\s*✘([\d,]+\.?\d*)\s*урона',
@@ -615,7 +630,6 @@ def parse_damage(message_text):
 def parse_heal(message_text):
     """Парсит восстановление здоровья"""
     try:
-        # Формат: "(+1❤️/3с)" или "+13❤️/3с"
         patterns = [
             r'\+([\d,]+\.?\d*)❤️',
             r'\+([\d,]+\.?\d*)💕',
@@ -635,7 +649,6 @@ def parse_heal(message_text):
 def parse_weapon_durability(message_text):
     """Парсит прочность оружия"""
     try:
-        # Формат: "✔️ Прочность оружия: 99%"
         pattern = r'✔️\s*Прочность оружия:\s*([\d,]+\.?\d*)%'
         match = re.search(pattern, message_text, re.IGNORECASE | re.MULTILINE)
         if match:
@@ -648,11 +661,8 @@ def detect_boss_health(message_text):
     """Проверяет наличие блока здоровья боя"""
     try:
         text = message_text or ""
-        
-        # Проверяем наличие обоих блоков здоровья
         has_boss = re.search(r'❤️\s*Босс\s*:', text, re.IGNORECASE)
         has_you = re.search(r'❤️\s*Ты\s*:', text, re.IGNORECASE)
-        
         return bool(has_boss and has_you)
     except Exception:
         return False
@@ -678,7 +688,6 @@ def is_attack_available(message_text):
     """Проверяет, доступна ли кнопка атаки"""
     try:
         text = message_text or ""
-        # Проверяем наличие кнопки "Атаковать" и отсутствие текста о победе
         has_attack_button = "✘ Атаковать" in text or "Атаковать" in text
         is_victory_text = is_victory(text)
         return has_attack_button and not is_victory_text
@@ -755,11 +764,10 @@ def check_critical_health(player_health, boss_index):
 # ===== DM АТАКА В ЛС С БОТОМ =====
 async def dm_attack_worker(boss_index, interval_sec):
     """Работает в ЛС с ботом IsekaiGlobal_bot"""
-    global dm_attack_running, dm_battle_msg_id, heal_mode, user_client, current_target
+    global dm_attack_running, dm_battle_msg_id, heal_mode, user_client, current_target, BOT_ID
     
     attack_count = 0
     max_attempts = 120
-    last_battle_data = None
     
     while dm_attack_running and attack_count < max_attempts:
         try:
@@ -880,16 +888,23 @@ async def dm_attack_worker(boss_index, interval_sec):
 # ===== ЗАПУСК DM АТАКИ =====
 async def start_dm_attack(boss_index):
     """Запускает DM-атаку в ЛС с ботом"""
-    global dm_attack_running, dm_attack_task, heal_mode, user_client
+    global dm_attack_running, dm_attack_task, heal_mode, user_client, BOT_ID
     
     if dm_attack_running:
         print("⚠️ DM-атака уже запущена")
         return False
     
+    if BOT_ID is None:
+        print("❌ ID бота не получен! Пытаюсь получить...")
+        await get_bot_id()
+        if BOT_ID is None:
+            print("❌ Не удалось получить ID бота!")
+            return False
+    
     try:
         # Отправляем "бо" в ЛС боту по ID
         await user_client.send_message(BOT_ID, "бо")
-        print("✏️ Отправил 'бо' в ЛС боту @IsekaiGlobal_bot")
+        print(f"✏️ Отправил 'бо' в ЛС боту @{BOT_USERNAME} (ID: {BOT_ID})")
         await asyncio.sleep(2)
         
         # Получаем сообщение с кнопками боссов от бота по ID
@@ -942,7 +957,7 @@ async def stop_dm_attack():
 
 # ===== МОНИТОРИНГ БОССОВ =====
 async def check_bosses():
-    global is_active, selected_bosses, chat_id, user_client, chat_created, last_equip_time, is_equip_mode, current_target, reconnect_attempts, last_activity_check, dm_attack_running
+    global is_active, selected_bosses, chat_id, user_client, chat_created, last_equip_time, is_equip_mode, current_target, reconnect_attempts, last_activity_check, dm_attack_running, BOT_ID
     
     if not user_client:
         print("⚠️ Нет подключения к аккаунту")
@@ -957,6 +972,8 @@ async def check_bosses():
             print("⚠️ Аккаунт неактивен, пытаюсь переподключиться...")
             if await reconnect_user():
                 print("✅ Аккаунт восстановлен!")
+                # Обновляем ID бота после переподключения
+                await get_bot_id()
             else:
                 print(f"❌ Не удалось переподключиться ({reconnect_attempts}/{MAX_RECONNECT_ATTEMPTS})")
                 return
@@ -1041,7 +1058,7 @@ async def check_bosses():
             boss_index = alive_bosses[0]
             boss = BOSSES[boss_index]
             
-            print(f"⚔️ Запускаю DM-атаку на {boss['name']} в ЛС @IsekaiGlobal_bot...")
+            print(f"⚔️ Запускаю DM-атаку на {boss['name']} в ЛС @{BOT_USERNAME}...")
             success = await start_dm_attack(boss_index)
             
             if success:
@@ -1105,17 +1122,20 @@ async def handle_main_commands(event, text):
         chat_status = "✅ Создан" if chat_created else "❌ Не создан"
         target_name = BOSSES[current_target]['name'] if current_target is not None else "Нет"
         dm_status = "🟢 Активна" if dm_attack_running else "🔴 Неактивна"
+        bot_id_status = f"✅ {BOT_ID}" if BOT_ID else "❌ Не получен"
         await event.respond(
             f"📊 **Текущий статус:**\n"
             f"🟢 Бот: {'ВКЛЮЧЕН' if is_active else 'ВЫКЛЮЧЕН'}\n"
             f"🎯 Выбрано боссов: {len(selected_bosses)}\n"
             f"⚔️ Атакуется: {target_name}\n"
             f"📁 Чат: {chat_status}\n"
-            f"💬 DM-атака: {dm_status}"
+            f"💬 DM-атака: {dm_status}\n"
+            f"🤖 ID бота: {bot_id_status}"
         )
     
     elif text == "🔄 ОБНОВИТЬ":
         await event.respond("🔄 Обновляю статус...")
+        await get_bot_id()  # Обновляем ID бота
         await check_bosses()
         await event.respond("✅ Готово! Проверь ЛС с @IsekaiGlobal_bot")
     
@@ -1144,7 +1164,7 @@ async def handle_main_commands(event, text):
 async def main():
     print("🚀 Запуск бота-охотника...")
     print(f"📁 Сессии сохраняются в папку: {SESSION_DIR}")
-    print(f"🤖 Работаем с ботом: @{BOT_USERNAME} (ID: {BOT_ID})")
+    print(f"🤖 Работаем с ботом: @{BOT_USERNAME}")
     await bot_client.start(bot_token=BOT_TOKEN)
     print("✅ Бот запущен! Жду авторизации...")
     
