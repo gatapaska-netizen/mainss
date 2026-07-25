@@ -22,6 +22,9 @@ API_HASH = "061bad708728d3d928054f16c932de6d"
 BOT_USERNAME = "IsekaiGlobal_bot"
 BOT_ID = None
 
+# КД атаки в секундах
+ATTACK_COOLDOWN = 0.8
+
 BOSSES = [
     {"emoji": "🧚", "name": "Лесная Фея"},
     {"emoji": "🧌", "name": "Гоблин"},
@@ -77,6 +80,7 @@ ACTIVITY_CHECK_INTERVAL = 60
 is_attacking = False
 attack_task = None
 attack_message_id = None
+last_attack_time = 0
 
 # ===== ФУНКЦИЯ ПОЛУЧЕНИЯ ID БОТА =====
 async def get_bot_id():
@@ -175,7 +179,7 @@ async def watcher_edit(event):
 # ===== ПРОВЕРКА И НАЖАТИЕ КНОПКИ =====
 async def check_and_click(message):
     """Проверяет наличие 💕 и нажимает кнопку"""
-    global is_attacking, current_target
+    global is_attacking, current_target, last_attack_time
     
     if not message or not message.text:
         return
@@ -200,13 +204,21 @@ async def check_and_click(message):
     
     # Проверяем наличие 💕
     if "💕" in text:
-        print("💕 Найден смайлик 💕 - нажимаю кнопку")
-        if message.buttons:
-            try:
-                await message.click(0)
-                print("✅ Нажата первая кнопка")
-            except Exception as e:
-                print(f"⚠️ Ошибка нажатия: {e}")
+        current_time = time.time()
+        # Проверяем КД
+        if current_time - last_attack_time >= ATTACK_COOLDOWN:
+            print("💕 Найден смайлик 💕 - нажимаю кнопку")
+            if message.buttons:
+                try:
+                    await message.click(0)
+                    last_attack_time = current_time
+                    print(f"✅ Нажата первая кнопка (КД: {ATTACK_COOLDOWN}с)")
+                except Exception as e:
+                    print(f"⚠️ Ошибка нажатия: {e}")
+        else:
+            # Пропускаем из-за КД
+            remaining = ATTACK_COOLDOWN - (current_time - last_attack_time)
+            print(f"⏳ Ожидание КД: {remaining:.2f}с")
     else:
         print("❌ Нет 💕 в сообщении - атака завершена!")
         is_attacking = False
@@ -231,11 +243,11 @@ async def attack_loop():
                     is_attacking = False
                     break
             
-            await asyncio.sleep(1)
+            await asyncio.sleep(0.5)  # Проверяем чаще для точности
             
         except Exception as e:
             print(f"⚠️ Ошибка в цикле атаки: {e}")
-            await asyncio.sleep(1)
+            await asyncio.sleep(0.5)
 
 # ===== АВТОРИЗАЦИЯ =====
 async def start_auth(event, user_id):
@@ -526,7 +538,7 @@ async def do_equip():
 # ===== ЗАПУСК АТАКИ =====
 async def start_attack(boss_index):
     """Запускает атаку на босса"""
-    global is_attacking, attack_task, attack_message_id, user_client, BOT_ID, current_target
+    global is_attacking, attack_task, attack_message_id, user_client, BOT_ID, current_target, last_attack_time
     
     if is_attacking:
         print("⚠️ Атака уже запущена")
@@ -574,10 +586,13 @@ async def start_attack(boss_index):
             attack_message_id = last_msg[0].id
             print(f"✅ Сохранён ID сообщения: {attack_message_id}")
         
+        # Сбрасываем КД
+        last_attack_time = 0
+        
         # Запускаем атаку
         is_attacking = True
         attack_task = asyncio.create_task(attack_loop())
-        print("✅ Атака запущена! Ожидаю 💕 в сообщении...")
+        print(f"✅ Атака запущена! КД: {ATTACK_COOLDOWN}с. Ожидаю 💕 в сообщении...")
         return True
         
     except Exception as e:
@@ -743,7 +758,8 @@ async def handle_main_commands(event, text):
             f"⚔️ Атакуется: {target_name}\n"
             f"📁 Чат: {chat_status}\n"
             f"💬 Атака: {attack_status}\n"
-            f"🤖 ID бота: {bot_id_status}"
+            f"🤖 ID бота: {bot_id_status}\n"
+            f"⏱️ КД атаки: {ATTACK_COOLDOWN}с"
         )
     
     elif text == "🔄 ОБНОВИТЬ":
@@ -777,6 +793,7 @@ async def main():
     print("🚀 Запуск бота-охотника...")
     print(f"📁 Сессии сохраняются в папку: {SESSION_DIR}")
     print(f"🤖 Работаем с ботом: @{BOT_USERNAME}")
+    print(f"⏱️ КД атаки: {ATTACK_COOLDOWN}с")
     await bot_client.start(bot_token=BOT_TOKEN)
     print("✅ Бот запущен! Жду авторизации...")
     await bot_client.run_until_disconnected()
