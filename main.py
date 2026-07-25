@@ -19,11 +19,9 @@ BOT_TOKEN = "8982270945:AAHWQUkaezlyPONPuJOWUtDNu63fcx3yvqU"
 API_ID = 25569323
 API_HASH = "061bad708728d3d928054f16c932de6d"
 
-# Имя бота IsekaiGlobal_bot
 BOT_USERNAME = "IsekaiGlobal_bot"
 BOT_ID = None
 
-# Список боссов
 BOSSES = [
     {"emoji": "🧚", "name": "Лесная Фея", "critical_health": 20},
     {"emoji": "🧌", "name": "Гоблин", "critical_health": 20},
@@ -58,7 +56,6 @@ BOSSES = [
 BOT_SESSION_PATH = os.path.join(SESSION_DIR, 'bot_session')
 bot_client = TelegramClient(BOT_SESSION_PATH, API_ID, API_HASH)
 
-# Переменные
 user_client = None
 is_active = False
 selected_bosses = set()
@@ -76,11 +73,11 @@ MAX_RECONNECT_ATTEMPTS = 5
 last_activity_check = 0
 ACTIVITY_CHECK_INTERVAL = 60
 
-dm_attack_running = False
-dm_attack_task = None
-dm_battle_msg_id = None
+# Для атаки
+attack_running = False
+attack_task = None
 heal_mode = False
-clicked_after_boss = set()
+last_attack_time = 0
 
 # ===== ФУНКЦИЯ ПОЛУЧЕНИЯ ID БОТА =====
 async def get_bot_id():
@@ -153,436 +150,140 @@ async def handle_message(event):
         elif step == 'done':
             await handle_main_commands(event, text)
 
-# ===== ВАТЧЕР ДЛЯ ОТСЛЕЖИВАНИЯ СООБЩЕНИЙ ОТ БОТА =====
+# ===== ПРОСТОЙ ВАТЧЕР ДЛЯ СООБЩЕНИЙ ОТ БОТА =====
 @bot_client.on(events.NewMessage)
-async def watcher_new(event):
-    """Отслеживает новые сообщения от бота"""
-    try:
-        if not event.message or not event.message.text:
-            return
-        
-        if event.message.chat_id == BOT_ID:
-            print(f"📩 Новое сообщение от бота (ID: {event.message.id})")
-            print(f"📝 Текст: {event.message.text[:200]}...")
-            
-            if dm_attack_running:
-                await process_battle_message(event.message)
-            
-            if is_victory(event.message.text):
-                await process_victory(event.message)
-                
-    except Exception as e:
-        print(f"⚠️ Ошибка в watcher_new: {e}")
+async def watcher(event):
+    """Следит за новыми сообщениями от бота"""
+    global attack_running
+    
+    if not event.message or not event.message.text:
+        return
+    
+    # Если это сообщение от IsekaiGlobal_bot в ЛС
+    if event.message.chat_id == BOT_ID and attack_running:
+        print(f"📩 Получено сообщение от бота")
+        await handle_bot_message(event.message)
 
 @bot_client.on(events.MessageEdited)
 async def watcher_edit(event):
-    """Отслеживает изменения сообщений от бота"""
-    try:
-        if not event.message or not event.message.text:
-            return
-        
-        if event.message.chat_id == BOT_ID:
-            print(f"✏️ Изменено сообщение от бота (ID: {event.message.id})")
-            print(f"📝 Текст: {event.message.text[:200]}...")
-            
-            if dm_attack_running:
-                await process_battle_message(event.message)
-            
-            if is_victory(event.message.text):
-                await process_victory(event.message)
-                
-    except Exception as e:
-        print(f"⚠️ Ошибка в watcher_edit: {e}")
-
-# ===== ФУНКЦИИ ПАРСИНГА (УНИВЕРСАЛЬНЫЕ) =====
-
-def detect_boss_health(message_text):
-    """Проверяет наличие блока здоровья боя (универсальный)"""
-    try:
-        text = message_text or ""
-        has_boss = re.search(r'босс\s*:', text, re.IGNORECASE)
-        has_you = re.search(r'ты\s*:', text, re.IGNORECASE)
-        return bool(has_boss and has_you)
-    except Exception:
-        return False
-
-def parse_player_health(message_text):
-    """Парсит здоровье игрока из сообщения (универсальный)"""
-    try:
-        patterns = [
-            r'(?:Ты|ты)\s*:\s*([\d,]+\.?\d*[K]?)\s*/\s*[\d,]+\.?\d*[K]?\s*(?:O3|ОЗ|оз)',
-            r'❤️?\s*(?:Ты|ты)\s*:\s*([\d,]+\.?\d*[K]?)\s*/\s*[\d,]+\.?\d*[K]?\s*(?:O3|ОЗ|оз)',
-            r'(?:Твоё|твоё)\s*здоровье\s*:\s*([\d,]+\.?\d*[K]?)',
-            r'(?:Ты|ты)\s+([\d,]+\.?\d*[K]?)\s*/\s*[\d,]+\.?\d*[K]?',
-        ]
-        
-        for pattern in patterns:
-            match = re.search(pattern, message_text, re.IGNORECASE | re.MULTILINE)
-            if match:
-                health_str = match.group(1).replace(',', '')
-                if 'K' in health_str.upper():
-                    health_str = health_str.upper().replace('K', '')
-                    return float(health_str) * 1000
-                return float(health_str)
-        
-        return None
-        
-    except Exception as e:
-        print(f"⚠️ Ошибка парсинга здоровья игрока: {e}")
-        return None
-
-def parse_boss_health(message_text):
-    """Парсит здоровье босса из сообщения (универсальный)"""
-    try:
-        patterns = [
-            r'(?:Босс|босс)\s*:\s*([\d,]+\.?\d*[K]?)\s*/\s*[\d,]+\.?\d*[K]?\s*(?:O3|ОЗ|оз)',
-            r'❤️?\s*(?:Босс|босс)\s*:\s*([\d,]+\.?\d*[K]?)\s*/\s*[\d,]+\.?\d*[K]?\s*(?:O3|ОЗ|оз)',
-            r'(?:Здоровье|здоровье)\s*(?:босса|Босса)\s*:\s*([\d,]+\.?\d*[K]?)',
-            r'(?:Босс|босс)\s+([\d,]+\.?\d*[K]?)\s*/\s*[\d,]+\.?\d*[K]?',
-        ]
-        
-        for pattern in patterns:
-            match = re.search(pattern, message_text, re.IGNORECASE | re.MULTILINE)
-            if match:
-                health_str = match.group(1).replace(',', '')
-                if 'K' in health_str.upper():
-                    health_str = health_str.upper().replace('K', '')
-                    return float(health_str) * 1000
-                return float(health_str)
-        
-        return None
-        
-    except Exception as e:
-        print(f"⚠️ Ошибка парсинга здоровья босса: {e}")
-        return None
-
-def parse_boss_name(message_text):
-    """Парсит имя босса из сообщения (универсальный)"""
-    try:
-        lines = message_text.strip().split('\n')
-        
-        for line in lines:
-            line = line.strip()
-            if not line:
-                continue
-            
-            skip_words = ['Босс:', 'Ты:', 'Атаковать', 'Обновить', 'x8', 'Назад', 'Закрыть', 
-                         '❤️', '⚔️', '✘', '✔️', '🟢', 'O3', 'ОЗ', 'оз', 'Прочность оружия']
-            if any(word in line for word in skip_words):
-                continue
-            
-            if len(line) > 1 and len(line) < 50:
-                name = re.sub(r'[^\w\s-]', '', line).strip()
-                if name and len(name) > 1:
-                    return name.lower()
-        
-        match = re.search(r'(?:Босс|босс)\s*:\s*([^\n]+)', message_text, re.IGNORECASE)
-        if match:
-            name = match.group(1).strip()
-            name = re.sub(r'[\d,\.\/K\s]+', '', name).strip()
-            if name and len(name) > 1:
-                return name.lower()
-        
-        return None
-        
-    except Exception as e:
-        print(f"⚠️ Ошибка парсинга имени босса: {e}")
-        return None
-
-def parse_heal(message_text):
-    """Парсит восстановление здоровья"""
-    try:
-        patterns = [
-            r'\+([\d,]+\.?\d*)[❤️💕]',
-            r'\(\+([\d,]+\.?\d*)[❤️💕]',
-            r'\+([\d,]+\.?\d*)\s*❤️',
-        ]
-        
-        for pattern in patterns:
-            match = re.search(pattern, message_text, re.IGNORECASE | re.MULTILINE)
-            if match:
-                heal_str = match.group(1).replace(',', '')
-                return float(heal_str)
-        return None
-    except Exception:
-        return None
-
-def parse_weapon_durability(message_text):
-    """Парсит прочность оружия"""
-    try:
-        pattern = r'Прочность оружия:\s*([\d,]+\.?\d*)%'
-        match = re.search(pattern, message_text, re.IGNORECASE | re.MULTILINE)
-        if match:
-            return float(match.group(1))
-        
-        pattern = r'✔️\s*Прочность оружия:\s*([\d,]+\.?\d*)%'
-        match = re.search(pattern, message_text, re.IGNORECASE | re.MULTILINE)
-        if match:
-            return float(match.group(1))
-        
-        return None
-    except Exception:
-        return None
-
-def is_victory(message_text):
-    """Определяет, что сообщение содержит текст победы"""
-    try:
-        text = (message_text or "").lower()
-        victory_phrases = [
-            "босс был повержен",
-            "тебе удалось убить",
-            "ты победил",
-            "поздравляем! ты убил",
-            "вы победили",
-            "босс побеждён",
-            "повержен",
-            "ты убил босса",
-            "поздравляю! ты убил",
-            "убил босса"
-        ]
-        return any(phrase in text for phrase in victory_phrases)
-    except Exception:
-        return False
-
-def is_attack_available(message_text):
-    """Проверяет, доступна ли кнопка атаки"""
-    try:
-        text = message_text or ""
-        return "Атаковать" in text
-    except Exception:
-        return False
-
-def parse_all_battle_data(message_text):
-    """Парсит все данные из сообщения боя (универсальный)"""
-    try:
-        if not message_text:
-            return None
-            
-        data = {
-            'player_health': parse_player_health(message_text),
-            'boss_health': parse_boss_health(message_text),
-            'boss_name': parse_boss_name(message_text),
-            'heal': parse_heal(message_text),
-            'weapon_durability': parse_weapon_durability(message_text),
-            'is_victory': is_victory(message_text),
-            'has_battle': detect_boss_health(message_text),
-            'can_attack': is_attack_available(message_text)
-        }
-        return data
-    except Exception as e:
-        print(f"⚠️ Ошибка парсинга данных боя: {e}")
-        return None
-
-def format_battle_status(battle_data):
-    """Форматирует данные боя для вывода в консоль"""
-    if not battle_data:
-        return "❌ Нет данных"
+    """Следит за изменениями сообщений от бота"""
+    global attack_running
     
-    lines = []
-    lines.append("📊 СТАТУС БОЯ:")
-    lines.append("-" * 30)
-    
-    if battle_data['boss_name']:
-        lines.append(f"👾 Босс: {battle_data['boss_name'].title()}")
-    else:
-        lines.append("👾 Босс: ❌ Не найден")
-    
-    if battle_data['boss_health'] is not None:
-        health = battle_data['boss_health']
-        if health >= 1000:
-            lines.append(f"💀 Здоровье босса: {health/1000:.2f}K")
-        else:
-            lines.append(f"💀 Здоровье босса: {health:.0f}")
-    else:
-        lines.append("💀 Здоровье босса: ❌ Не найдено")
-    
-    if battle_data['player_health'] is not None:
-        lines.append(f"❤️ Твоё здоровье: {battle_data['player_health']:.0f}")
-    else:
-        lines.append("❤️ Твоё здоровье: ❌ Не найдено")
-    
-    if battle_data['weapon_durability'] is not None:
-        lines.append(f"🔧 Прочность оружия: {battle_data['weapon_durability']:.0f}%")
-    
-    if battle_data['can_attack']:
-        lines.append("⚔️ Кнопка АТАКОВАТЬ: ✅ Доступна")
-    else:
-        lines.append("⚔️ Кнопка АТАКОВАТЬ: ❌ Не найдена")
-    
-    lines.append("-" * 30)
-    return "\n".join(lines)
-
-def check_critical_health(player_health, boss_index):
-    """Проверяет, является ли здоровье игрока критическим для данного босса"""
-    try:
-        boss = BOSSES[boss_index]
-        critical_health = boss.get('critical_health', 60)
-        return player_health < critical_health, critical_health
-    except Exception:
-        return False, 60
-
-# ===== ОБРАБОТКА СООБЩЕНИЯ БОЯ =====
-async def process_battle_message(message):
-    """Обрабатывает сообщение с боем"""
-    global dm_attack_running, dm_battle_msg_id, heal_mode, current_target
-    
-    if not message or not message.text:
-        print("❌ Пустое сообщение")
+    if not event.message or not event.message.text:
         return
     
+    # Если это сообщение от IsekaiGlobal_bot в ЛС
+    if event.message.chat_id == BOT_ID and attack_running:
+        print(f"✏️ Изменено сообщение от бота")
+        await handle_bot_message(event.message)
+
+# ===== ОБРАБОТКА СООБЩЕНИЯ ОТ БОТА =====
+async def handle_bot_message(message):
+    """Обрабатывает сообщение от бота - нажимает кнопку если нужно"""
+    global heal_mode, last_attack_time
+    
     try:
-        print("\n" + "="*50)
-        print("🔍 АНАЛИЗ СООБЩЕНИЯ ОТ БОТА")
-        print("="*50)
-        print(f"📝 Текст сообщения:\n{message.text[:500]}")
-        print("-"*50)
+        text = message.text or ""
         
-        has_battle = detect_boss_health(message.text)
-        print(f"📊 Есть бой: {has_battle}")
-        
-        if not has_battle:
-            print("❌ Это не сообщение с боем")
-            return
-        
+        # Проверяем наличие кнопок
         if not message.buttons:
             print("❌ Нет кнопок в сообщении")
             return
         
-        print(f"🔘 Найдено кнопок:")
-        for row in message.buttons:
-            for btn in row:
-                print(f"   - {btn.text}")
-        print("-"*50)
+        print(f"📝 Текст: {text[:100]}...")
         
-        battle_data = parse_all_battle_data(message.text)
-        if battle_data:
-            status_text = format_battle_status(battle_data)
-            print(status_text)
-        else:
-            print("❌ Не удалось распарсить данные")
-            return
-        
-        if battle_data['is_victory']:
+        # Проверяем победу
+        if "повержен" in text.lower() or "убил" in text.lower():
             print("🏆 ПОБЕДА! Забираем награду...")
-            await process_victory(message)
-            return
+            try:
+                await message.click(0)
+                print("✅ Награда забрана!")
+                # Останавливаем атаку
+                global attack_running
+                attack_running = False
+                if attack_task:
+                    attack_task.cancel()
+                return
+            except Exception as e:
+                print(f"⚠️ Ошибка забора награды: {e}")
+                return
         
-        if current_target is not None and battle_data['player_health'] is not None:
-            is_critical, critical_health = check_critical_health(battle_data['player_health'], current_target)
+        # Проверяем наличие "Босс:" и "Ты:" - значит это бой
+        if "Босс:" in text and "Ты:" in text:
+            print("⚔️ Обнаружен бой!")
             
-            if is_critical and not heal_mode:
-                print(f"⚠️ КРИТИЧЕСКОЕ ЗДОРОВЬЕ! {battle_data['player_health']:.0f} < {critical_health}")
-                heal_mode = True
-            elif not is_critical and heal_mode:
-                print(f"✅ Здоровье восстановлено! {battle_data['player_health']:.0f} >= {critical_health}")
-                heal_mode = False
-        
-        print("🔄 Начинаю поиск кнопки для нажатия...")
-        await click_battle_button(message)
-        print("="*50 + "\n")
+            # Проверяем здоровье игрока
+            player_health = None
+            health_match = re.search(r'Ты\s*:\s*([\d,]+\.?\d*[K]?)\s*/\s*[\d,]+\.?\d*[K]?', text, re.IGNORECASE)
+            if health_match:
+                health_str = health_match.group(1).replace(',', '')
+                if 'K' in health_str.upper():
+                    health_str = health_str.upper().replace('K', '')
+                    player_health = float(health_str) * 1000
+                else:
+                    player_health = float(health_str)
+                print(f"❤️ Твоё здоровье: {player_health}")
+            
+            # Проверяем критическое здоровье
+            if current_target is not None and player_health is not None:
+                boss = BOSSES[current_target]
+                critical = boss.get('critical_health', 60)
+                if player_health < critical:
+                    if not heal_mode:
+                        print(f"⚠️ КРИТИЧЕСКОЕ ЗДОРОВЬЕ! {player_health} < {critical}")
+                        heal_mode = True
+                else:
+                    if heal_mode:
+                        print(f"✅ Здоровье восстановлено!")
+                        heal_mode = False
+            
+            # Нажимаем кнопку
+            await click_button(message)
         
     except Exception as e:
-        print(f"⚠️ Ошибка обработки боя: {e}")
-        import traceback
-        traceback.print_exc()
+        print(f"⚠️ Ошибка обработки сообщения: {e}")
 
-# ===== НАЖАТИЕ КНОПКИ В БОЮ =====
-async def click_battle_button(message):
-    """Нажимает нужную кнопку в бою"""
-    global dm_attack_running, dm_battle_msg_id, heal_mode
-    
-    if not message or not message.buttons:
-        print("❌ Нет кнопок для нажатия")
-        return
+# ===== НАЖАТИЕ КНОПКИ =====
+async def click_button(message):
+    """Нажимает нужную кнопку в сообщении"""
+    global heal_mode, last_attack_time
     
     try:
-        print(f"🔄 Режим лечения: {heal_mode}")
-        found_action = False
+        current_time = time.time()
+        
+        # Проверяем кд - не чаще 1 раза в секунду
+        if current_time - last_attack_time < 1:
+            return
         
         if heal_mode:
+            # Ищем кнопку "Обновить"
             for row in message.buttons:
                 for btn in row:
-                    btn_text = btn.text
-                    print(f"🔍 Проверяю кнопку: '{btn_text}'")
-                    if "Обновить" in btn_text or "🟢" in btn_text:
-                        print(f"✅ НАШЁЛ кнопку лечения: {btn_text}")
+                    if "Обновить" in btn.text or "🟢" in btn.text:
+                        print("🔄 Нажимаю ОБНОВИТЬ (лечение)")
                         await message.click(btn)
-                        print("🔄 Нажата кнопка ОБНОВИТЬ (лечение)")
-                        found_action = True
-                        break
-                if found_action:
-                    break
+                        last_attack_time = current_time
+                        return
         else:
+            # Ищем кнопку "Атаковать"
             for row in message.buttons:
                 for btn in row:
-                    btn_text = btn.text
-                    print(f"🔍 Проверяю кнопку: '{btn_text}'")
-                    if "Атаковать" in btn_text:
-                        print(f"✅ НАШЁЛ кнопку атаки: {btn_text}")
+                    if "Атаковать" in btn.text:
+                        print("⚔️ Нажимаю АТАКОВАТЬ")
                         await message.click(btn)
-                        print("⚔️ Нажата кнопка АТАКОВАТЬ")
-                        found_action = True
-                        break
-                if found_action:
-                    break
-        
-        if not found_action:
-            try:
-                first_btn = message.buttons[0][0]
-                print(f"🔍 Не найдено подходящих кнопок, нажимаю первую: '{first_btn.text}'")
-                await message.click(0)
-                print(f"⚔️ Нажата первая кнопка")
-                found_action = True
-            except Exception as e:
-                print(f"⚠️ Ошибка нажатия первой кнопки: {e}")
-        
-        if found_action:
-            dm_battle_msg_id = message.id
-            print(f"✅ Действие выполнено! ID сообщения: {dm_battle_msg_id}")
-        else:
-            print("❌ НЕ НАЙДЕНО подходящей кнопки для нажатия!")
-            print("📋 Доступные кнопки:")
-            for row in message.buttons:
-                for btn in row:
-                    print(f"   - '{btn.text}'")
+                        last_attack_time = current_time
+                        return
             
+            # Если не нашли "Атаковать", пробуем первую кнопку
+            try:
+                print("⚔️ Нажимаю первую кнопку")
+                await message.click(0)
+                last_attack_time = current_time
+            except Exception as e:
+                print(f"⚠️ Ошибка нажатия: {e}")
+                
     except Exception as e:
         print(f"⚠️ Ошибка нажатия кнопки: {e}")
-        import traceback
-        traceback.print_exc()
-
-# ===== ОБРАБОТКА ПОБЕДЫ =====
-async def process_victory(message):
-    global dm_attack_running, current_target, clicked_after_boss
-    
-    if not message or not message.text:
-        return
-    
-    msg_id = (message.chat_id, message.id)
-    if msg_id in clicked_after_boss:
-        print("⏭️ Победа уже обработана")
-        return
-    
-    try:
-        print("🏆 БОСС ПОВЕРЖЕН! Забираем награду...")
-        if message.buttons:
-            await message.click(0)
-            clicked_after_boss.add(msg_id)
-            
-            dm_attack_running = False
-            if dm_attack_task and not dm_attack_task.done():
-                try:
-                    dm_attack_task.cancel()
-                except Exception:
-                    pass
-            
-            current_target = None
-            heal_mode = False
-            dm_battle_msg_id = None
-            print("✅ Награда получена! Бот готов к следующей цели")
-            
-    except Exception as e:
-        print(f"⚠️ Ошибка обработки победы: {e}")
 
 # ===== АВТОРИЗАЦИЯ =====
 async def start_auth(event, user_id):
@@ -870,12 +571,13 @@ async def do_equip():
         print(f"❌ Ошибка экипировки: {e}")
         is_equip_mode = False
 
-# ===== ЗАПУСК DM АТАКИ =====
-async def start_dm_attack(boss_index):
-    global dm_attack_running, dm_attack_task, heal_mode, user_client, BOT_ID, dm_battle_msg_id
+# ===== ЗАПУСК АТАКИ =====
+async def start_attack(boss_index):
+    """Запускает атаку на босса"""
+    global attack_running, attack_task, heal_mode, user_client, BOT_ID
     
-    if dm_attack_running:
-        print("⚠️ DM-атака уже запущена")
+    if attack_running:
+        print("⚠️ Атака уже запущена")
         return False
     
     if BOT_ID is None:
@@ -885,23 +587,25 @@ async def start_dm_attack(boss_index):
             return False
     
     try:
+        # Отправляем "бо" боту
         await user_client.send_message(BOT_ID, "бо")
-        print(f"✏️ Отправил 'бо' в ЛС боту @{BOT_USERNAME} (ID: {BOT_ID})")
+        print(f"✏️ Отправил 'бо' в ЛС @{BOT_USERNAME}")
         await asyncio.sleep(2)
         
+        # Получаем сообщение с кнопками боссов
         messages = await user_client.get_messages(BOT_ID, limit=3)
         if not messages:
             print("❌ Нет сообщений от бота")
             return False
         
+        # Нажимаем кнопку босса
         boss_selected = False
         for msg in messages:
             if msg.buttons:
                 flat_buttons = [btn for row in msg.buttons for btn in row]
                 if boss_index < len(flat_buttons):
                     await msg.click(boss_index)
-                    boss_name = flat_buttons[boss_index].text
-                    print(f"✅ Нажата кнопка {boss_index + 1}: {boss_name}")
+                    print(f"✅ Нажата кнопка {boss_index + 1}: {flat_buttons[boss_index].text}")
                     boss_selected = True
                     break
         
@@ -909,31 +613,31 @@ async def start_dm_attack(boss_index):
             print(f"❌ Кнопка с индексом {boss_index} не найдена")
             return False
         
+        # Запускаем атаку
         heal_mode = False
-        dm_attack_running = True
-        dm_battle_msg_id = None
-        print("✅ DM-атака запущена! Ожидаю сообщения от бота...")
+        attack_running = True
+        print("✅ Атака запущена! Ожидаю сообщения от бота...")
         return True
         
     except Exception as e:
-        print(f"❌ Ошибка запуска DM-атаки: {e}")
+        print(f"❌ Ошибка запуска атаки: {e}")
         return False
 
-# ===== ОСТАНОВКА DM АТАКИ =====
-async def stop_dm_attack():
-    global dm_attack_running, dm_attack_task
-    dm_attack_running = False
-    if dm_attack_task and not dm_attack_task.done():
+# ===== ОСТАНОВКА АТАКИ =====
+async def stop_attack():
+    global attack_running, attack_task
+    attack_running = False
+    if attack_task and not attack_task.done():
         try:
-            dm_attack_task.cancel()
+            attack_task.cancel()
         except Exception:
             pass
-    dm_attack_task = None
-    print("🛑 DM-атака остановлена")
+    attack_task = None
+    print("🛑 Атака остановлена")
 
 # ===== МОНИТОРИНГ БОССОВ =====
 async def check_bosses():
-    global is_active, selected_bosses, chat_id, user_client, chat_created, last_equip_time, is_equip_mode, current_target, reconnect_attempts, last_activity_check, dm_attack_running, BOT_ID
+    global is_active, selected_bosses, chat_id, user_client, chat_created, last_equip_time, is_equip_mode, current_target, reconnect_attempts, last_activity_check, attack_running, BOT_ID
     
     if not user_client:
         return
@@ -949,7 +653,7 @@ async def check_bosses():
             else:
                 return
     
-    if dm_attack_running:
+    if attack_running:
         return
     
     if not is_active or not selected_bosses or not chat_created:
@@ -1015,13 +719,13 @@ async def check_bosses():
         if alive_bosses:
             boss_index = alive_bosses[0]
             boss = BOSSES[boss_index]
-            print(f"⚔️ Запускаю DM-атаку на {boss['name']} в ЛС @{BOT_USERNAME}...")
-            success = await start_dm_attack(boss_index)
+            print(f"⚔️ Запускаю атаку на {boss['name']} в ЛС @{BOT_USERNAME}...")
+            success = await start_attack(boss_index)
             if success:
                 current_target = boss_index
                 print(f"✅ {boss['name']} атакуется в ЛС! Блокирую всех боссов до его смерти...")
             else:
-                print(f"❌ Не удалось запустить DM-атаку на {boss['name']}")
+                print(f"❌ Не удалось запустить атаку на {boss['name']}")
         else:
             print("⏳ Нет живых боссов из выбранных")
         
@@ -1046,15 +750,15 @@ async def main_loop():
 
 # ===== ОБРАБОТКА КОМАНД =====
 async def handle_main_commands(event, text):
-    global is_active, selected_bosses, current_target, dm_attack_running
+    global is_active, selected_bosses, current_target, attack_running
     
     if text in ["✅ ВКЛЮЧИТЬ", "❌ ВЫКЛЮЧИТЬ"]:
         is_active = not is_active
         status = "🟢 ВКЛЮЧЕН" if is_active else "🔴 ВЫКЛЮЧЕН"
         if not is_active:
             current_target = None
-            if dm_attack_running:
-                await stop_dm_attack()
+            if attack_running:
+                await stop_attack()
         await event.respond(
             f"📊 Статус: {status}\n🎯 Выбрано боссов: {len(selected_bosses)}",
             buttons=get_main_keyboard()
@@ -1069,7 +773,7 @@ async def handle_main_commands(event, text):
     elif text == "📊 СТАТУС БОССОВ":
         chat_status = "✅ Создан" if chat_created else "❌ Не создан"
         target_name = BOSSES[current_target]['name'] if current_target is not None else "Нет"
-        dm_status = "🟢 Активна" if dm_attack_running else "🔴 Неактивна"
+        attack_status = "🟢 Активна" if attack_running else "🔴 Неактивна"
         bot_id_status = f"✅ {BOT_ID}" if BOT_ID else "❌ Не получен"
         await event.respond(
             f"📊 **Текущий статус:**\n"
@@ -1077,7 +781,7 @@ async def handle_main_commands(event, text):
             f"🎯 Выбрано боссов: {len(selected_bosses)}\n"
             f"⚔️ Атакуется: {target_name}\n"
             f"📁 Чат: {chat_status}\n"
-            f"💬 DM-атака: {dm_status}\n"
+            f"💬 Атака: {attack_status}\n"
             f"🤖 ID бота: {bot_id_status}"
         )
     
@@ -1097,8 +801,8 @@ async def handle_main_commands(event, text):
                     selected_bosses.remove(i)
                     if current_target == i:
                         current_target = None
-                        if dm_attack_running:
-                            await stop_dm_attack()
+                        if attack_running:
+                            await stop_attack()
                 else:
                     selected_bosses.add(i)
                 await event.respond(
