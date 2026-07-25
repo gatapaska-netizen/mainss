@@ -15,40 +15,47 @@ if not os.path.exists(SESSION_DIR):
     print(f"📁 Создана папка для сессий: {SESSION_DIR}")
 
 # ===== КОНФИГ =====
-BOT_TOKEN = "8945736908:AAH7OvniUJiZCIEm7rK-lT61zScBs7lC408"
+BOT_TOKEN = "8695263973:AAHge3QFURlz1nOJVtGmdav5HQ2NL5-RjeI"
 API_ID = 25569323
 API_HASH = "061bad708728d3d928054f16c932de6d"
 
 # Список боссов (порядок = порядок кнопок в боте)
 BOSSES = [
-    {"emoji": "🧚", "name": "Лесная Фея"},
-    {"emoji": "🧌", "name": "Гоблин"},
-    {"emoji": "🦌", "name": "Дух Рощи"},
-    {"emoji": "🫎", "name": "Лесной Владыка"},
-    {"emoji": "🧛‍♀️", "name": "Ночной Вампир"},
-    {"emoji": "💀", "name": "Костяной Лорд"},
-    {"emoji": "☠️", "name": "Король Некромантов"},
-    {"emoji": "👑", "name": "Лич"},
-    {"emoji": "🐦‍🔥", "name": "Солнечный Феникс"},
-    {"emoji": "🌋", "name": "Лавовый Голем"},
-    {"emoji": "👺", "name": "Тэнгу"},
-    {"emoji": "👹", "name": "Демон"},
-    {"emoji": "🤖", "name": "Автоматон"},
-    {"emoji": "🐸", "name": "Меха Жаба"},
-    {"emoji": "🦂", "name": "Меха Скорпион"},
-    {"emoji": "🐛", "name": "Меха Червь"},
-    {"emoji": "❄️", "name": "Ледяной Элементаль"},
-    {"emoji": "👻", "name": "Призрак"},
-    {"emoji": "🌩", "name": "Громовой Страж"},
-    {"emoji": "🧊", "name": "Морозный Голем"},
-    {"emoji": "🐊", "name": "Крокодил"},
-    {"emoji": "🐲", "name": "Дракон"},
-    {"emoji": "🐢", "name": "Черепаха"},
-    {"emoji": "🦕", "name": "Зауропод"},
-    {"emoji": "🐙", "name": "Кракен"},
-    {"emoji": "🦈", "name": "Глубинная Акула"},
-    {"emoji": "🐳", "name": "Кит"},
-    {"emoji": "🦀", "name": "Король Рифов"}
+    # ГРУППА 1: критическое здоровье 20 (боссы 0-3)
+    {"emoji": "🧚", "name": "Лесная Фея", "critical_health": 20},
+    {"emoji": "🧌", "name": "Гоблин", "critical_health": 20},
+    {"emoji": "🦌", "name": "Дух Рощи", "critical_health": 20},
+    {"emoji": "🫎", "name": "Лесной Владыка", "critical_health": 20},
+    
+    # ГРУППА 2: критическое здоровье 30 (боссы 4-7)
+    {"emoji": "🧛‍♀️", "name": "Ночной Вампир", "critical_health": 30},
+    {"emoji": "💀", "name": "Костяной Лорд", "critical_health": 30},
+    {"emoji": "☠️", "name": "Король Некромантов", "critical_health": 30},
+    {"emoji": "👑", "name": "Лич", "critical_health": 30},
+    
+    # ГРУППА 3: критическое здоровье 40 (боссы 8-11)
+    {"emoji": "🐦‍🔥", "name": "Солнечный Феникс", "critical_health": 40},
+    {"emoji": "🌋", "name": "Лавовый Голем", "critical_health": 40},
+    {"emoji": "👺", "name": "Тэнгу", "critical_health": 40},
+    {"emoji": "👹", "name": "Демон", "critical_health": 40},
+    
+    # ГРУППА 4: критическое здоровье 60 (боссы 12-27)
+    {"emoji": "🤖", "name": "Автоматон", "critical_health": 60},
+    {"emoji": "🐸", "name": "Меха Жаба", "critical_health": 60},
+    {"emoji": "🦂", "name": "Меха Скорпион", "critical_health": 60},
+    {"emoji": "🐛", "name": "Меха Червь", "critical_health": 60},
+    {"emoji": "❄️", "name": "Ледяной Элементаль", "critical_health": 60},
+    {"emoji": "👻", "name": "Призрак", "critical_health": 60},
+    {"emoji": "🌩", "name": "Громовой Страж", "critical_health": 60},
+    {"emoji": "🧊", "name": "Морозный Голем", "critical_health": 60},
+    {"emoji": "🐊", "name": "Крокодил", "critical_health": 60},
+    {"emoji": "🐲", "name": "Дракон", "critical_health": 60},
+    {"emoji": "🐢", "name": "Черепаха", "critical_health": 60},
+    {"emoji": "🦕", "name": "Зауропод", "critical_health": 60},
+    {"emoji": "🐙", "name": "Кракен", "critical_health": 60},
+    {"emoji": "🦈", "name": "Глубинная Акула", "critical_health": 60},
+    {"emoji": "🐳", "name": "Кит", "critical_health": 60},
+    {"emoji": "🦀", "name": "Король Рифов", "critical_health": 60}
 ]
 
 # Путь к сессии бота
@@ -466,7 +473,7 @@ async def do_equip():
         
         await user_client.send_message(bot_username, "экип")
         print("✏️ Отправил 'экип'")
-        await asyncio.sleep(1)  # Изменено: 2 → 1 секунда
+        await asyncio.sleep(1)
         
         messages = await user_client.get_messages(bot_username, limit=2)
         if not messages:
@@ -479,10 +486,10 @@ async def do_equip():
                 flat_buttons = [btn for row in msg.buttons for btn in row]
                 
                 if len(flat_buttons) >= 8:
-                    await asyncio.sleep(1)  # Изменено: 2 → 1 секунда
+                    await asyncio.sleep(1)
                     await msg.click(7)
                     print("✅ Нажата 8-я кнопка (Слоты)")
-                    await asyncio.sleep(1)  # Изменено: 2 → 1 секунда
+                    await asyncio.sleep(1)
                     
                     new_messages = await user_client.get_messages(bot_username, limit=2)
                     if new_messages:
@@ -491,10 +498,10 @@ async def do_equip():
                                 new_buttons = [btn for row in new_msg.buttons for btn in row]
                                 
                                 if len(new_buttons) >= 6:
-                                    await asyncio.sleep(1)  # Изменено: 2 → 1 секунда
+                                    await asyncio.sleep(1)
                                     await new_msg.click(5)
                                     print("✅ Нажата 6-я кнопка")
-                                    await asyncio.sleep(1)  # Изменено: 2 → 1 секунда
+                                    await asyncio.sleep(1)
                                     break
                     break
         
@@ -504,6 +511,198 @@ async def do_equip():
     except Exception as e:
         print(f"❌ Ошибка экипировки: {e}")
         is_equip_mode = False
+
+# ===== ПАРСИНГ ЗДОРОВЬЯ =====
+def parse_player_health(message_text):
+    """Парсит здоровье игрока из сообщения"""
+    try:
+        # Паттерны для поиска здоровья
+        patterns = [
+            r'❤\s*Твоё\s*здоровье\s*:\s*([\d,]+\.?\d*)\s*/\s*[\d,]+\.?\d*\s*ОЗ',
+            r'❤\s*Твоё\s*здоровье\s*([\d,]+\.?\d*)\s*/\s*[\d,]+\.?\d*\s*ОЗ',
+            r'Твоё\s*здоровье\s*:\s*([\d,]+\.?\d*)\s*/\s*[\d,]+\.?\d*\s*ОЗ',
+            r'(?:❤|❤️)\s*Ты\s*:\s*([\d,]+\.?\d*)\s*/\s*[\d,]+\.?\d*\s*ОЗ',
+            r'❤️\s*Твоё здоровье:\s*([\d,]+\.?\d*)',
+            r'Твоё здоровье:\s*([\d,]+\.?\d*)',
+            r'❤️ Твоё здоровье:\s*([\d,]+\.?\d*)',
+        ]
+        
+        for pattern in patterns:
+            match = re.search(pattern, message_text, re.IGNORECASE | re.MULTILINE)
+            if match:
+                health_str = match.group(1).replace(',', '')
+                return float(health_str)
+        
+        return None
+        
+    except Exception:
+        return None
+
+# ===== ФУНКЦИЯ ПРОВЕРКИ КРИТИЧЕСКОГО ЗДОРОВЬЯ =====
+def check_critical_health(player_health, boss_index):
+    """Проверяет, является ли здоровье игрока критическим для данного босса"""
+    try:
+        boss = BOSSES[boss_index]
+        critical_health = boss.get('critical_health', 60)
+        return player_health < critical_health, critical_health
+    except Exception:
+        return False, 60
+
+# ===== АТАКА БОССА (С ПОДДЕРЖКОЙ КРИТИЧЕСКОГО ЗДОРОВЬЯ) =====
+async def attack_boss(boss_index):
+    """Атакует босса по индексу с умным определением статуса боя"""
+    global user_client, is_equip_mode
+    
+    try:
+        # 1. Пишем "бо" в бота
+        await user_client.send_message(bot_username, "бо")
+        print("✏️ Отправил 'бо' в бота")
+        await asyncio.sleep(2)
+        
+        # 2. Получаем сообщение с кнопками боссов
+        messages = await user_client.get_messages(bot_username, limit=3)
+        if not messages:
+            print("❌ Нет сообщений от бота")
+            return False
+        
+        # 3. Ищем кнопку по индексу босса и нажимаем её
+        boss_selected = False
+        for msg in messages:
+            if msg.buttons:
+                flat_buttons = [btn for row in msg.buttons for btn in row]
+                
+                if boss_index < len(flat_buttons):
+                    await msg.click(boss_index)
+                    boss_name = flat_buttons[boss_index].text
+                    print(f"✅ Нажата кнопка {boss_index + 1}: {boss_name}")
+                    boss_selected = True
+                    break
+        
+        if not boss_selected:
+            print(f"❌ Кнопка с индексом {boss_index} не найдена")
+            return False
+        
+        # 4. Ждём появления сообщения с кнопкой "⚔ Атаковать"
+        await asyncio.sleep(2)
+        
+        # 5. Начинаем цикл нажатия на кнопку "Атаковать"
+        attack_count = 0
+        heal_mode = False
+        heal_interval = 2.0  # Интервал лечения
+        max_attempts = 120  # Максимум 120 попыток (2 минуты)
+        last_message_id = None
+        message_deleted = False
+        last_health = None
+        
+        while attack_count < max_attempts and not message_deleted:
+            try:
+                # Получаем последние сообщения
+                recent_messages = await user_client.get_messages(bot_username, limit=5)
+                
+                found_attack_button = False
+                current_battle_msg = None
+                
+                # Проверяем сообщения на наличие боя
+                for msg in recent_messages:
+                    # Проверяем, не сообщение ли это о победе
+                    if msg.text and ("босс был повержен" in msg.text.lower() or "тебе удалось убить" in msg.text.lower()):
+                        print("🏆 Босс повержен! Забираем награду...")
+                        if msg.buttons:
+                            await msg.click(0)  # Нажимаем первую кнопку для забора награды
+                        return True
+                    
+                    # Парсим здоровье игрока из сообщения
+                    if msg.text:
+                        player_health = parse_player_health(msg.text)
+                        if player_health is not None:
+                            # Проверяем критическое здоровье
+                            is_critical, critical_health = check_critical_health(player_health, boss_index)
+                            last_health = player_health
+                            
+                            if is_critical and not heal_mode:
+                                print(f"⚠️ Критическое здоровье! {player_health} < {critical_health}")
+                                heal_mode = True
+                            elif not is_critical and heal_mode:
+                                print(f"✅ Здоровье восстановлено! {player_health} >= {critical_health}")
+                                heal_mode = False
+                    
+                    if msg.buttons:
+                        # Ищем кнопку "Атаковать" или с мечом
+                        for row in msg.buttons:
+                            for btn in row:
+                                # В режиме лечения ищем кнопку "Обновить" или с крестиком
+                                if heal_mode:
+                                    if "Обновить" in btn.text or "🔄" in btn.text:
+                                        await msg.click(btn)
+                                        print(f"🔄 Нажата кнопка лечения (Обновить)")
+                                        found_attack_button = True
+                                        current_battle_msg = msg
+                                        break
+                                else:
+                                    if "⚔" in btn.text or "Атаковать" in btn.text or "атаковать" in btn.text.lower():
+                                        # Сохраняем ID сообщения для отслеживания
+                                        if last_message_id != msg.id:
+                                            last_message_id = msg.id
+                                            attack_count = 0  # Сбрасываем счётчик для нового сообщения
+                                        
+                                        # Нажимаем кнопку атаки
+                                        await msg.click(btn)
+                                        attack_count += 1
+                                        print(f"⚔️ Нажата кнопка атаки #{attack_count}")
+                                        found_attack_button = True
+                                        current_battle_msg = msg
+                                        break
+                            if found_attack_button:
+                                break
+                    
+                    if found_attack_button:
+                        break
+                
+                if not found_attack_button:
+                    # Проверяем, не удалилось ли сообщение с боем
+                    if last_message_id:
+                        try:
+                            # Пытаемся получить сообщение по ID
+                            check_msg = await user_client.get_messages(bot_username, ids=last_message_id)
+                            if not check_msg:
+                                print("✅ Сообщение с боем удалено! Атака завершена.")
+                                message_deleted = True
+                                return True
+                        except Exception:
+                            print("✅ Сообщение с боем удалено! Атака завершена.")
+                            message_deleted = True
+                            return True
+                    
+                    # Проверяем, есть ли вообще какие-то сообщения с кнопками
+                    has_any_buttons = False
+                    for msg in recent_messages:
+                        if msg.buttons:
+                            has_any_buttons = True
+                            break
+                    
+                    if not has_any_buttons:
+                        print("✅ Нет активных кнопок! Атака завершена.")
+                        return True
+                    
+                    print("⏳ Кнопка атаки не найдена, жду...")
+                
+                # Ждём 1 секунду перед следующей попыткой (как вы просили)
+                await asyncio.sleep(1)
+                
+            except Exception as e:
+                print(f"⚠️ Ошибка при нажатии атаки: {e}")
+                await asyncio.sleep(1)
+                continue
+        
+        if attack_count >= max_attempts:
+            print(f"⏰ Достигнут лимит попыток атаки ({max_attempts})")
+        else:
+            print("✅ Атака завершена!")
+        return True
+        
+    except Exception as e:
+        print(f"❌ Ошибка атаки: {e}")
+        return False
 
 # ===== МОНИТОРИНГ БОССОВ =====
 async def check_bosses():
@@ -537,7 +736,7 @@ async def check_bosses():
         await do_equip()
         last_equip_time = current_time
         print("⏳ Жду 1 минуту после экипировки...")
-        await asyncio.sleep(60)  # Изменено: 10 → 60 секунд
+        await asyncio.sleep(60)
         return
     
     if is_equip_mode:
@@ -619,48 +818,6 @@ async def check_bosses():
         
     except Exception as e:
         print(f"Ошибка в check_bosses: {e}")
-
-# ===== АТАКА БОССА =====
-async def attack_boss(boss_index):
-    """Атакует босса по индексу (1-я кнопка = 1-й босс)"""
-    global user_client
-    
-    try:
-        # 1. Пишем "бо" в бота
-        await user_client.send_message(bot_username, "бо")
-        await asyncio.sleep(2)
-        
-        # 2. Получаем сообщение с кнопками
-        messages = await user_client.get_messages(bot_username, limit=2)
-        if not messages:
-            print("❌ Нет сообщений от бота")
-            return False
-        
-        # 3. Ищем кнопку по индексу босса
-        for msg in messages:
-            if msg.buttons:
-                flat_buttons = [btn for row in msg.buttons for btn in row]
-                
-                if boss_index < len(flat_buttons):
-                    await msg.click(boss_index)
-                    print(f"✅ Нажата кнопка {boss_index + 1}: {flat_buttons[boss_index].text}")
-                    
-                    # 4. После нажатия кнопки отправляем "ав+" в бота
-                    await asyncio.sleep(1)
-                    await user_client.send_message(bot_username, "ав+")
-                    print(f"✅ Отправлено 'ав+' в бота")
-                    
-                    return True
-                else:
-                    print(f"❌ Кнопка с индексом {boss_index} не найдена (всего {len(flat_buttons)})")
-                    return False
-        
-        print("❌ Кнопки не найдены")
-        return False
-        
-    except Exception as e:
-        print(f"Ошибка атаки: {e}")
-        return False
 
 # ===== ОСНОВНОЙ ЦИКЛ =====
 async def main_loop():
