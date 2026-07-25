@@ -15,7 +15,7 @@ if not os.path.exists(SESSION_DIR):
     print(f"📁 Создана папка для сессий: {SESSION_DIR}")
 
 # ===== КОНФИГ =====
-BOT_TOKEN = "8982270945:AAHWQUkaezlyPONPuJOWUtDNu63fcx3yvqU"
+BOT_TOKEN = "8695263973:AAHge3QFURlz1nOJVtGmdav5HQ2NL5-RjeI"
 API_ID = 25569323
 API_HASH = "061bad708728d3d928054f16c932de6d"
 
@@ -73,6 +73,13 @@ current_target = None
 # Статус авторизации
 auth_states = {}
 user_codes = {}
+
+# Для авто-переподключения
+reconnect_attempts = 0
+MAX_RECONNECT_ATTEMPTS = 5
+RECONNECT_DELAY = 30  # секунд между попытками
+last_activity_check = 0
+ACTIVITY_CHECK_INTERVAL = 60  # проверка каждую минуту
 
 # ===== КЛАВИАТУРЫ =====
 def get_main_keyboard():
@@ -254,7 +261,7 @@ async def handle_password(event, user_id, password):
         await event.respond(f"❌ Неверный пароль: {str(e)}\nПопробуй ещё раз.")
 
 async def complete_auth(event, user_id, client):
-    global user_client, chat_id, chat_created
+    global user_client, chat_id, chat_created, reconnect_attempts, last_activity_check
     
     user_client = client
     me = await client.get_me()
@@ -263,6 +270,10 @@ async def complete_auth(event, user_id, client):
         'step': 'done',
         'phone': auth_states[user_id]['phone']
     }
+    
+    # Сбрасываем счётчик попыток и время проверки
+    reconnect_attempts = 0
+    last_activity_check = time.time()
     
     await event.respond(
         f"✅ **Успешный вход!** \n\n"
@@ -279,6 +290,7 @@ async def complete_auth(event, user_id, client):
     else:
         await event.respond("ℹ️ Чат уже существует, подключаюсь...")
     
+    # Запускаем основной цикл, если ещё не запущен
     asyncio.create_task(main_loop())
 
 # ===== СОЗДАНИЕ ЧАТА =====
@@ -357,6 +369,92 @@ async def give_admin_rights(client, chat_id):
     except Exception as e:
         print(f"⚠️ Ошибка: {e}")
 
+# ===== ФУНКЦИЯ ПРОВЕРКИ АКТИВНОСТИ =====
+async def check_user_activity():
+    """Проверяет активность пользовательского аккаунта"""
+    global user_client, reconnect_attempts
+    
+    if not user_client:
+        return False
+    
+    try:
+        # Пытаемся получить информацию о себе - если ошибка, значит сессия неактивна
+        await user_client.get_me()
+        reconnect_attempts = 0  # Сброс попыток при успехе
+        return True
+    except Exception as e:
+        print(f"⚠️ Ошибка проверки активности: {e}")
+        return False
+
+# ===== ФУНКЦИЯ ПЕРЕПОДКЛЮЧЕНИЯ =====
+async def reconnect_user():
+    """Переподключает пользовательский аккаунт с сохранённой сессией"""
+    global user_client, reconnect_attempts, is_active, current_target, chat_created
+    
+    if not user_client:
+        print("❌ Нет клиента для переподключения")
+        return False
+    
+    try:
+        print(f"🔄 Попытка переподключения #{reconnect_attempts + 1}...")
+        
+        # Отключаем текущий клиент если он есть
+        if user_client.is_connected():
+            await user_client.disconnect()
+            await asyncio.sleep(2)
+        
+        # Переподключаемся с той же сессией
+        await user_client.connect()
+        
+        # Проверяем что сессия работает
+        me = await user_client.get_me()
+        print(f"✅ Успешное переподключение! Аккаунт: {me.first_name}")
+        
+        # Сбрасываем флаги ошибок
+        reconnect_attempts = 0
+        
+        # Если бот был активен - продолжаем работу
+        if is_active:
+            print("🔄 Восстанавливаем активный режим...")
+            # Пересоздаём чат если нужно
+            if not chat_created:
+                chat_created = await create_or_get_chat(user_client)
+                if chat_created:
+                    print("✅ Чат восстановлен!")
+        
+        return True
+        
+    except Exception as e:
+        print(f"❌ Ошибка переподключения: {e}")
+        reconnect_attempts += 1
+        
+        # Если слишком много ошибок - отключаем бота
+        if reconnect_attempts >= MAX_RECONNECT_ATTEMPTS:
+            print("🔴 Слишком много ошибок подключения!")
+            is_active = False
+            current_target = None
+            await notify_user_about_disconnect()
+            reconnect_attempts = 0
+        
+        return False
+
+# ===== ФУНКЦИЯ УВЕДОМЛЕНИЯ =====
+async def notify_user_about_disconnect():
+    """Уведомляет пользователя об отключении бота"""
+    try:
+        # Ищем пользователя в auth_states
+        for user_id, state in auth_states.items():
+            if state.get('step') == 'done':
+                await bot_client.send_message(
+                    user_id,
+                    "⚠️ **Бот был автоматически отключён!**\n\n"
+                    "Причина: слишком много ошибок подключения к аккаунту.\n"
+                    "Пожалуйста, перезапустите бота командой `/start` и авторизуйтесь заново."
+                )
+                break
+    except Exception as e:
+        print(f"⚠️ Не удалось уведомить пользователя: {e}")
+
 # ===== ФУНКЦИЯ ЭКИПИРОВКИ =====
 async def do_equip():
     """Выполняет экипировку: пишет 'экип', нажимает 8-ю кнопку (слоты), затем 6-ю"""
@@ -409,9 +507,28 @@ async def do_equip():
 
 # ===== МОНИТОРИНГ БОССОВ =====
 async def check_bosses():
-    global is_active, selected_bosses, chat_id, user_client, chat_created, last_equip_time, is_equip_mode, current_target
+    global is_active, selected_bosses, chat_id, user_client, chat_created, last_equip_time, is_equip_mode, current_target, reconnect_attempts, last_activity_check
     
-    if not user_client or not is_active or not selected_bosses or not chat_created:
+    if not user_client:
+        print("⚠️ Нет подключения к аккаунту")
+        return
+    
+    # Проверка активности аккаунта
+    current_time = time.time()
+    if current_time - last_activity_check >= ACTIVITY_CHECK_INTERVAL:
+        last_activity_check = current_time
+        
+        if not await check_user_activity():
+            print("⚠️ Аккаунт неактивен, пытаюсь переподключиться...")
+            
+            # Пытаемся переподключиться
+            if await reconnect_user():
+                print("✅ Аккаунт восстановлен!")
+            else:
+                print(f"❌ Не удалось переподключиться ({reconnect_attempts}/{MAX_RECONNECT_ATTEMPTS})")
+                return
+    
+    if not is_active or not selected_bosses or not chat_created:
         return
     
     current_time = time.time()
@@ -547,9 +664,28 @@ async def attack_boss(boss_index):
 
 # ===== ОСНОВНОЙ ЦИКЛ =====
 async def main_loop():
+    """Главный цикл с проверкой подключения"""
+    global is_active
+    
     while True:
-        await check_bosses()
-        await asyncio.sleep(20)  # Проверка каждые 20 секунд
+        try:
+            await check_bosses()
+            
+            # Если бот активен, но нет подключения - пробуем восстановить
+            if is_active and user_client:
+                if not user_client.is_connected():
+                    print("⚠️ Потеряно соединение, пытаюсь восстановить...")
+                    await reconnect_user()
+                    
+                    # Если восстановились - проверяем чат
+                    if user_client and user_client.is_connected():
+                        await create_or_get_chat(user_client)
+            
+            await asyncio.sleep(20)
+            
+        except Exception as e:
+            print(f"❌ Ошибка в главном цикле: {e}")
+            await asyncio.sleep(30)  # Ждём 30 секунд перед следующей попыткой
 
 # ===== ОБРАБОТКА КОМАНД =====
 async def handle_main_commands(event, text):
