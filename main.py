@@ -19,6 +19,9 @@ BOT_TOKEN = "8982270945:AAHWQUkaezlyPONPuJOWUtDNu63fcx3yvqU"
 API_ID = 25569323
 API_HASH = "061bad708728d3d928054f16c932de6d"
 
+# ID бота IsekaiGlobal_bot
+BOT_ID = 5522271758  # ID бота IsekaiGlobal_bot
+
 # Список боссов (порядок = порядок кнопок в боте)
 BOSSES = [
     # ГРУППА 1: критическое здоровье 20 (боссы 0-3)
@@ -84,9 +87,16 @@ user_codes = {}
 # Для авто-переподключения
 reconnect_attempts = 0
 MAX_RECONNECT_ATTEMPTS = 5
-RECONNECT_DELAY = 30  # секунд между попытками
+RECONNECT_DELAY = 30
 last_activity_check = 0
-ACTIVITY_CHECK_INTERVAL = 60  # проверка каждую минуту
+ACTIVITY_CHECK_INTERVAL = 60
+
+# Для DM-автоатаки
+dm_attack_task = None
+dm_attack_running = False
+dm_battle_msg_id = None
+heal_mode = False
+heal_interval = 2.0
 
 # ===== КЛАВИАТУРЫ =====
 def get_main_keyboard():
@@ -278,7 +288,6 @@ async def complete_auth(event, user_id, client):
         'phone': auth_states[user_id]['phone']
     }
     
-    # Сбрасываем счётчик попыток и время проверки
     reconnect_attempts = 0
     last_activity_check = time.time()
     
@@ -297,7 +306,6 @@ async def complete_auth(event, user_id, client):
     else:
         await event.respond("ℹ️ Чат уже существует, подключаюсь...")
     
-    # Запускаем основной цикл, если ещё не запущен
     asyncio.create_task(main_loop())
 
 # ===== СОЗДАНИЕ ЧАТА =====
@@ -378,16 +386,14 @@ async def give_admin_rights(client, chat_id):
 
 # ===== ФУНКЦИЯ ПРОВЕРКИ АКТИВНОСТИ =====
 async def check_user_activity():
-    """Проверяет активность пользовательского аккаунта"""
     global user_client, reconnect_attempts
     
     if not user_client:
         return False
     
     try:
-        # Пытаемся получить информацию о себе - если ошибка, значит сессия неактивна
         await user_client.get_me()
-        reconnect_attempts = 0  # Сброс попыток при успехе
+        reconnect_attempts = 0
         return True
     except Exception as e:
         print(f"⚠️ Ошибка проверки активности: {e}")
@@ -395,7 +401,6 @@ async def check_user_activity():
 
 # ===== ФУНКЦИЯ ПЕРЕПОДКЛЮЧЕНИЯ =====
 async def reconnect_user():
-    """Переподключает пользовательский аккаунт с сохранённой сессией"""
     global user_client, reconnect_attempts, is_active, current_target, chat_created
     
     if not user_client:
@@ -405,25 +410,18 @@ async def reconnect_user():
     try:
         print(f"🔄 Попытка переподключения #{reconnect_attempts + 1}...")
         
-        # Отключаем текущий клиент если он есть
         if user_client.is_connected():
             await user_client.disconnect()
             await asyncio.sleep(2)
         
-        # Переподключаемся с той же сессией
         await user_client.connect()
-        
-        # Проверяем что сессия работает
         me = await user_client.get_me()
         print(f"✅ Успешное переподключение! Аккаунт: {me.first_name}")
         
-        # Сбрасываем флаги ошибок
         reconnect_attempts = 0
         
-        # Если бот был активен - продолжаем работу
         if is_active:
             print("🔄 Восстанавливаем активный режим...")
-            # Пересоздаём чат если нужно
             if not chat_created:
                 chat_created = await create_or_get_chat(user_client)
                 if chat_created:
@@ -435,7 +433,6 @@ async def reconnect_user():
         print(f"❌ Ошибка переподключения: {e}")
         reconnect_attempts += 1
         
-        # Если слишком много ошибок - отключаем бота
         if reconnect_attempts >= MAX_RECONNECT_ATTEMPTS:
             print("🔴 Слишком много ошибок подключения!")
             is_active = False
@@ -447,9 +444,7 @@ async def reconnect_user():
 
 # ===== ФУНКЦИЯ УВЕДОМЛЕНИЯ =====
 async def notify_user_about_disconnect():
-    """Уведомляет пользователя об отключении бота"""
     try:
-        # Ищем пользователя в auth_states
         for user_id, state in auth_states.items():
             if state.get('step') == 'done':
                 await bot_client.send_message(
@@ -464,7 +459,6 @@ async def notify_user_about_disconnect():
 
 # ===== ФУНКЦИЯ ЭКИПИРОВКИ =====
 async def do_equip():
-    """Выполняет экипировку: пишет 'экип', нажимает 8-ю кнопку (слоты), затем 6-ю"""
     global user_client, is_equip_mode
     
     try:
@@ -516,7 +510,6 @@ async def do_equip():
 def parse_player_health(message_text):
     """Парсит здоровье игрока из сообщения"""
     try:
-        # Паттерны для поиска здоровья
         patterns = [
             r'❤\s*Твоё\s*здоровье\s*:\s*([\d,]+\.?\d*)\s*/\s*[\d,]+\.?\d*\s*ОЗ',
             r'❤\s*Твоё\s*здоровье\s*([\d,]+\.?\d*)\s*/\s*[\d,]+\.?\d*\s*ОЗ',
@@ -538,7 +531,29 @@ def parse_player_health(message_text):
     except Exception:
         return None
 
-# ===== ФУНКЦИЯ ПРОВЕРКИ КРИТИЧЕСКОГО ЗДОРОВЬЯ =====
+def detect_boss_health(message_text):
+    """Проверяет наличие блока здоровья боя"""
+    try:
+        text = message_text or ""
+        lower_text = text.lower()
+        
+        if "здоровье босса" in lower_text:
+            return True
+        
+        has_boss_block = re.search(r"(?:❤|❤️)\s*босс\s*:\s*([\d,]+\.?\d*)\s*/\s*([\d,]+\.?\d*)\s*оз", lower_text, re.IGNORECASE)
+        has_you_block = re.search(r"(?:❤|❤️)\s*ты\s*:\s*([\d,]+\.?\d*)\s*/\s*([\d,]+\.?\d*)\s*оз", lower_text, re.IGNORECASE)
+        return bool(has_boss_block or has_you_block)
+    except Exception:
+        return False
+
+def is_victory(message_text):
+    """Определяет, что сообщение содержит текст победы"""
+    try:
+        text = (message_text or "").lower()
+        return ("босс был повержен" in text) or ("тебе удалось убить" in text)
+    except Exception:
+        return False
+
 def check_critical_health(player_health, boss_index):
     """Проверяет, является ли здоровье игрока критическим для данного босса"""
     try:
@@ -548,24 +563,122 @@ def check_critical_health(player_health, boss_index):
     except Exception:
         return False, 60
 
-# ===== АТАКА БОССА (С ПОДДЕРЖКОЙ КРИТИЧЕСКОГО ЗДОРОВЬЯ) =====
-async def attack_boss(boss_index):
-    """Атакует босса по индексу с умным определением статуса боя"""
-    global user_client, is_equip_mode
+# ===== DM АТАКА В ЛС С БОТОМ =====
+async def dm_attack_worker(boss_index, interval_sec):
+    """Работает в ЛС с ботом IsekaiGlobal_bot"""
+    global dm_attack_running, dm_battle_msg_id, heal_mode, user_client, current_target
+    
+    attack_count = 0
+    max_attempts = 120
+    
+    while dm_attack_running and attack_count < max_attempts:
+        try:
+            # Получаем последние сообщения от бота
+            recent_messages = await user_client.get_messages(BOT_ID, limit=5)
+            
+            found_action = False
+            victory_found = False
+            
+            for msg in recent_messages:
+                if not msg:
+                    continue
+                
+                # Проверяем на победу
+                if msg.text and is_victory(msg.text):
+                    print("🏆 Босс повержен! Забираем награду...")
+                    if msg.buttons:
+                        await msg.click(0)
+                        victory_found = True
+                        dm_attack_running = False
+                        current_target = None
+                        return True
+                    continue
+                
+                # Проверяем наличие боя
+                if msg.buttons and detect_boss_health(msg.text or ""):
+                    # Парсим здоровье
+                    player_health = parse_player_health(msg.text or "")
+                    if player_health is not None:
+                        is_critical, critical_health = check_critical_health(player_health, boss_index)
+                        
+                        if is_critical and not heal_mode:
+                            print(f"⚠️ Критическое здоровье! {player_health} < {critical_health}")
+                            heal_mode = True
+                        elif not is_critical and heal_mode:
+                            print(f"✅ Здоровье восстановлено! {player_health} >= {critical_health}")
+                            heal_mode = False
+                    
+                    # Нажимаем кнопку
+                    if heal_mode:
+                        # Ищем кнопку "Обновить" или "🔄"
+                        for row in msg.buttons:
+                            for btn in row:
+                                if "Обновить" in btn.text or "🔄" in btn.text:
+                                    await msg.click(btn)
+                                    print(f"🔄 Нажата кнопка лечения (Обновить)")
+                                    found_action = True
+                                    break
+                            if found_action:
+                                break
+                    else:
+                        # Нажимаем первую кнопку (атака) - как в модуле
+                        await msg.click(0)
+                        attack_count += 1
+                        print(f"⚔️ Нажата кнопка атаки #{attack_count}")
+                        found_action = True
+                    
+                    if found_action:
+                        dm_battle_msg_id = msg.id
+                        break
+            
+            if not found_action and not victory_found:
+                # Проверяем, не удалилось ли сообщение
+                if dm_battle_msg_id:
+                    try:
+                        check_msg = await user_client.get_messages(BOT_ID, ids=dm_battle_msg_id)
+                        if not check_msg:
+                            print("✅ Сообщение с боем удалено!")
+                            dm_attack_running = False
+                            return True
+                    except Exception:
+                        dm_attack_running = False
+                        return True
+            
+            # Ждём 1 секунду
+            await asyncio.sleep(1)
+            
+        except Exception as e:
+            print(f"⚠️ Ошибка в DM атаке: {e}")
+            await asyncio.sleep(1)
+    
+    if attack_count >= max_attempts:
+        print(f"⏰ Достигнут лимит попыток атаки ({max_attempts})")
+    
+    dm_attack_running = False
+    return True
+
+# ===== ЗАПУСК DM АТАКИ =====
+async def start_dm_attack(boss_index):
+    """Запускает DM-атаку в ЛС с ботом"""
+    global dm_attack_running, dm_attack_task, heal_mode, user_client
+    
+    if dm_attack_running:
+        print("⚠️ DM-атака уже запущена")
+        return False
     
     try:
-        # 1. Пишем "бо" в бота
-        await user_client.send_message(bot_username, "бо")
-        print("✏️ Отправил 'бо' в бота")
+        # Отправляем "бо" в ЛС боту
+        await user_client.send_message(BOT_ID, "бо")
+        print("✏️ Отправил 'бо' в ЛС боту")
         await asyncio.sleep(2)
         
-        # 2. Получаем сообщение с кнопками боссов
-        messages = await user_client.get_messages(bot_username, limit=3)
+        # Получаем сообщение с кнопками боссов
+        messages = await user_client.get_messages(BOT_ID, limit=3)
         if not messages:
             print("❌ Нет сообщений от бота")
             return False
         
-        # 3. Ищем кнопку по индексу босса и нажимаем её
+        # Ищем кнопку по индексу босса и нажимаем её
         boss_selected = False
         for msg in messages:
             if msg.buttons:
@@ -582,154 +695,60 @@ async def attack_boss(boss_index):
             print(f"❌ Кнопка с индексом {boss_index} не найдена")
             return False
         
-        # 4. Ждём появления сообщения с кнопкой "⚔ Атаковать"
-        await asyncio.sleep(2)
-        
-        # 5. Начинаем цикл нажатия на кнопку "Атаковать"
-        attack_count = 0
+        # Запускаем DM-атаку
         heal_mode = False
-        heal_interval = 2.0  # Интервал лечения
-        max_attempts = 120  # Максимум 120 попыток (2 минуты)
-        last_message_id = None
-        message_deleted = False
-        last_health = None
-        
-        while attack_count < max_attempts and not message_deleted:
-            try:
-                # Получаем последние сообщения
-                recent_messages = await user_client.get_messages(bot_username, limit=5)
-                
-                found_attack_button = False
-                current_battle_msg = None
-                
-                # Проверяем сообщения на наличие боя
-                for msg in recent_messages:
-                    # Проверяем, не сообщение ли это о победе
-                    if msg.text and ("босс был повержен" in msg.text.lower() or "тебе удалось убить" in msg.text.lower()):
-                        print("🏆 Босс повержен! Забираем награду...")
-                        if msg.buttons:
-                            await msg.click(0)  # Нажимаем первую кнопку для забора награды
-                        return True
-                    
-                    # Парсим здоровье игрока из сообщения
-                    if msg.text:
-                        player_health = parse_player_health(msg.text)
-                        if player_health is not None:
-                            # Проверяем критическое здоровье
-                            is_critical, critical_health = check_critical_health(player_health, boss_index)
-                            last_health = player_health
-                            
-                            if is_critical and not heal_mode:
-                                print(f"⚠️ Критическое здоровье! {player_health} < {critical_health}")
-                                heal_mode = True
-                            elif not is_critical and heal_mode:
-                                print(f"✅ Здоровье восстановлено! {player_health} >= {critical_health}")
-                                heal_mode = False
-                    
-                    if msg.buttons:
-                        # Ищем кнопку "Атаковать" или с мечом
-                        for row in msg.buttons:
-                            for btn in row:
-                                # В режиме лечения ищем кнопку "Обновить" или с крестиком
-                                if heal_mode:
-                                    if "Обновить" in btn.text or "🔄" in btn.text:
-                                        await msg.click(btn)
-                                        print(f"🔄 Нажата кнопка лечения (Обновить)")
-                                        found_attack_button = True
-                                        current_battle_msg = msg
-                                        break
-                                else:
-                                    if "⚔" in btn.text or "Атаковать" in btn.text or "атаковать" in btn.text.lower():
-                                        # Сохраняем ID сообщения для отслеживания
-                                        if last_message_id != msg.id:
-                                            last_message_id = msg.id
-                                            attack_count = 0  # Сбрасываем счётчик для нового сообщения
-                                        
-                                        # Нажимаем кнопку атаки
-                                        await msg.click(btn)
-                                        attack_count += 1
-                                        print(f"⚔️ Нажата кнопка атаки #{attack_count}")
-                                        found_attack_button = True
-                                        current_battle_msg = msg
-                                        break
-                            if found_attack_button:
-                                break
-                    
-                    if found_attack_button:
-                        break
-                
-                if not found_attack_button:
-                    # Проверяем, не удалилось ли сообщение с боем
-                    if last_message_id:
-                        try:
-                            # Пытаемся получить сообщение по ID
-                            check_msg = await user_client.get_messages(bot_username, ids=last_message_id)
-                            if not check_msg:
-                                print("✅ Сообщение с боем удалено! Атака завершена.")
-                                message_deleted = True
-                                return True
-                        except Exception:
-                            print("✅ Сообщение с боем удалено! Атака завершена.")
-                            message_deleted = True
-                            return True
-                    
-                    # Проверяем, есть ли вообще какие-то сообщения с кнопками
-                    has_any_buttons = False
-                    for msg in recent_messages:
-                        if msg.buttons:
-                            has_any_buttons = True
-                            break
-                    
-                    if not has_any_buttons:
-                        print("✅ Нет активных кнопок! Атака завершена.")
-                        return True
-                    
-                    print("⏳ Кнопка атаки не найдена, жду...")
-                
-                # Ждём 1 секунду перед следующей попыткой (как вы просили)
-                await asyncio.sleep(1)
-                
-            except Exception as e:
-                print(f"⚠️ Ошибка при нажатии атаки: {e}")
-                await asyncio.sleep(1)
-                continue
-        
-        if attack_count >= max_attempts:
-            print(f"⏰ Достигнут лимит попыток атаки ({max_attempts})")
-        else:
-            print("✅ Атака завершена!")
+        dm_attack_running = True
+        dm_attack_task = asyncio.create_task(dm_attack_worker(boss_index, 1))
+        print("✅ DM-атака запущена!")
         return True
         
     except Exception as e:
-        print(f"❌ Ошибка атаки: {e}")
+        print(f"❌ Ошибка запуска DM-атаки: {e}")
         return False
 
-# ===== МОНИТОРИНГ БОССОВ =====
+# ===== ОСТАНОВКА DM АТАКИ =====
+async def stop_dm_attack():
+    """Останавливает DM-атаку"""
+    global dm_attack_running, dm_attack_task
+    
+    dm_attack_running = False
+    if dm_attack_task and not dm_attack_task.done():
+        try:
+            dm_attack_task.cancel()
+        except Exception:
+            pass
+    dm_attack_task = None
+    print("🛑 DM-атака остановлена")
+
+# ===== МОНИТОРИНГ БОССОВ (ОБНОВЛЁННЫЙ) =====
 async def check_bosses():
-    global is_active, selected_bosses, chat_id, user_client, chat_created, last_equip_time, is_equip_mode, current_target, reconnect_attempts, last_activity_check
+    global is_active, selected_bosses, chat_id, user_client, chat_created, last_equip_time, is_equip_mode, current_target, reconnect_attempts, last_activity_check, dm_attack_running
     
     if not user_client:
         print("⚠️ Нет подключения к аккаунту")
         return
     
-    # Проверка активности аккаунта
+    # Проверка активности
     current_time = time.time()
     if current_time - last_activity_check >= ACTIVITY_CHECK_INTERVAL:
         last_activity_check = current_time
         
         if not await check_user_activity():
             print("⚠️ Аккаунт неактивен, пытаюсь переподключиться...")
-            
-            # Пытаемся переподключиться
             if await reconnect_user():
                 print("✅ Аккаунт восстановлен!")
             else:
                 print(f"❌ Не удалось переподключиться ({reconnect_attempts}/{MAX_RECONNECT_ATTEMPTS})")
                 return
     
+    # Если DM-атака уже запущена - не мешаем
+    if dm_attack_running:
+        return
+    
     if not is_active or not selected_bosses or not chat_created:
         return
     
+    # Экипировка
     current_time = time.time()
     if current_time - last_equip_time >= 1200:
         print("⏰ Пора делать экипировку!")
@@ -743,14 +762,14 @@ async def check_bosses():
         return
     
     try:
-        # 1. Пишем "бл" в чат
+        # Пишем "бл" в чат
         await user_client.send_message(chat_id, "бл")
         await asyncio.sleep(2)
         
-        # 2. Получаем последние сообщения
+        # Получаем последние сообщения
         messages = await user_client.get_messages(chat_id, limit=10)
         
-        # 3. Ищем сообщение от IsekaiGlobal_bot
+        # Ищем сообщение от бота
         boss_message = None
         bot_entity = await user_client.get_entity(bot_username)
         for msg in messages:
@@ -762,7 +781,7 @@ async def check_bosses():
             print("⚠️ Сообщение с боссами не найдено")
             return
         
-        # 4. Если есть текущая цель — проверяем её статус
+        # Если есть текущая цель — проверяем её статус
         if current_target is not None:
             boss = BOSSES[current_target]
             pattern = rf"{boss['emoji']}.*{boss['name']}.*(Жив!|\d+[мс. ]+\d*[мс.]*)"
@@ -773,21 +792,18 @@ async def check_bosses():
                 is_alive = status == "Жив!"
                 
                 if is_alive:
-                    # Босс ещё жив → ждём
                     print(f"⏳ {boss['name']} ещё жив ({status}), жду смерти...")
                     return
                 else:
-                    # Босс умер → разблокируем
                     print(f"💀 {boss['name']} умер! Разблокирован для новой атаки!")
                     current_target = None
                     return
             else:
-                # Не нашли босса в сообщении (может быть ошибка)
                 print(f"⚠️ Не найден статус для {boss['name']}, разблокирую...")
                 current_target = None
                 return
         
-        # 5. Нет текущей цели — ищем живого босса для атаки
+        # Нет текущей цели — ищем живого босса
         alive_bosses = []
         for index in selected_bosses:
             boss = BOSSES[index]
@@ -800,19 +816,19 @@ async def check_bosses():
                     alive_bosses.append(index)
                     print(f"🔥 {boss['name']} жив!")
         
-        # 6. Если есть живые боссы — атакуем первого
+        # Если есть живые боссы — запускаем DM-атаку в ЛС
         if alive_bosses:
             boss_index = alive_bosses[0]
             boss = BOSSES[boss_index]
             
-            print(f"⚔️ Атакую {boss['name']}...")
-            success = await attack_boss(boss_index)
+            print(f"⚔️ Запускаю DM-атаку на {boss['name']} в ЛС...")
+            success = await start_dm_attack(boss_index)
             
             if success:
                 current_target = boss_index
-                print(f"✅ {boss['name']} атакован! Блокирую всех боссов до его смерти...")
+                print(f"✅ {boss['name']} атакуется в ЛС! Блокирую всех боссов до его смерти...")
             else:
-                print(f"❌ Не удалось атаковать {boss['name']}")
+                print(f"❌ Не удалось запустить DM-атаку на {boss['name']}")
         else:
             print("⏳ Нет живых боссов из выбранных")
         
@@ -821,20 +837,17 @@ async def check_bosses():
 
 # ===== ОСНОВНОЙ ЦИКЛ =====
 async def main_loop():
-    """Главный цикл с проверкой подключения"""
     global is_active
     
     while True:
         try:
             await check_bosses()
             
-            # Если бот активен, но нет подключения - пробуем восстановить
             if is_active and user_client:
                 if not user_client.is_connected():
                     print("⚠️ Потеряно соединение, пытаюсь восстановить...")
                     await reconnect_user()
                     
-                    # Если восстановились - проверяем чат
                     if user_client and user_client.is_connected():
                         await create_or_get_chat(user_client)
             
@@ -842,18 +855,19 @@ async def main_loop():
             
         except Exception as e:
             print(f"❌ Ошибка в главном цикле: {e}")
-            await asyncio.sleep(30)  # Ждём 30 секунд перед следующей попыткой
+            await asyncio.sleep(30)
 
 # ===== ОБРАБОТКА КОМАНД =====
 async def handle_main_commands(event, text):
-    global is_active, selected_bosses, chat_id, user_client, chat_created, current_target
+    global is_active, selected_bosses, chat_id, user_client, chat_created, current_target, dm_attack_running
     
     if text in ["✅ ВКЛЮЧИТЬ", "❌ ВЫКЛЮЧИТЬ"]:
         is_active = not is_active
         status = "🟢 ВКЛЮЧЕН" if is_active else "🔴 ВЫКЛЮЧЕН"
         if not is_active:
-            # При выключении сбрасываем цель
             current_target = None
+            if dm_attack_running:
+                await stop_dm_attack()
         await event.respond(
             f"📊 Статус: {status}\n"
             f"🎯 Выбрано боссов: {len(selected_bosses)}",
@@ -870,18 +884,20 @@ async def handle_main_commands(event, text):
     elif text == "📊 СТАТУС БОССОВ":
         chat_status = "✅ Создан" if chat_created else "❌ Не создан"
         target_name = BOSSES[current_target]['name'] if current_target is not None else "Нет"
+        dm_status = "🟢 Активна" if dm_attack_running else "🔴 Неактивна"
         await event.respond(
             f"📊 **Текущий статус:**\n"
             f"🟢 Бот: {'ВКЛЮЧЕН' if is_active else 'ВЫКЛЮЧЕН'}\n"
             f"🎯 Выбрано боссов: {len(selected_bosses)}\n"
             f"⚔️ Атакуется: {target_name}\n"
-            f"📁 Чат: {chat_status}"
+            f"📁 Чат: {chat_status}\n"
+            f"💬 DM-атака: {dm_status}"
         )
     
     elif text == "🔄 ОБНОВИТЬ":
         await event.respond("🔄 Обновляю статус...")
         await check_bosses()
-        await event.respond("✅ Готово! Проверь чат МБЛ")
+        await event.respond("✅ Готово! Проверь ЛС с ботом")
     
     elif text == "🔙 НАЗАД":
         await event.respond("🔙 Возвращаюсь в главное меню", buttons=get_main_keyboard())
@@ -891,9 +907,10 @@ async def handle_main_commands(event, text):
             if boss['emoji'] in text:
                 if i in selected_bosses:
                     selected_bosses.remove(i)
-                    # Если босс убран из выбора и он был целью — сбрасываем
                     if current_target == i:
                         current_target = None
+                        if dm_attack_running:
+                            await stop_dm_attack()
                 else:
                     selected_bosses.add(i)
                 
