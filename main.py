@@ -7,7 +7,6 @@ import asyncio
 import re
 import time
 import os
-import sqlite3
 
 # ===== СОЗДАНИЕ ПАПКИ ДЛЯ СЕССИЙ =====
 SESSION_DIR = "sessions"
@@ -24,7 +23,7 @@ BOT_USERNAME = "IsekaiGlobal_bot"
 BOT_ID = None
 
 # КД атаки в секундах
-ATTACK_COOLDOWN = 0.95
+ATTACK_COOLDOWN = 0.8
 
 BOSSES = [
     {"emoji": "🧚", "name": "Лесная Фея"},
@@ -61,7 +60,6 @@ BOT_SESSION_PATH = os.path.join(SESSION_DIR, 'bot_session')
 bot_client = TelegramClient(BOT_SESSION_PATH, API_ID, API_HASH)
 
 user_client = None
-user_session_path = None
 is_active = False
 selected_bosses = set()
 chat_id = None
@@ -69,7 +67,6 @@ chat_created = False
 last_equip_time = 0
 is_equip_mode = False
 current_target = None
-current_user_id = None
 
 auth_states = {}
 user_codes = {}
@@ -84,7 +81,6 @@ is_attacking = False
 attack_task = None
 attack_message_id = None
 last_attack_time = 0
-boss_selected = False  # Флаг для предотвращения двойного выбора босса
 
 # ===== ФУНКЦИЯ ПОЛУЧЕНИЯ ID БОТА =====
 async def get_bot_id():
@@ -209,6 +205,7 @@ async def check_and_click(message):
     # Проверяем наличие 💕
     if "💕" in text:
         current_time = time.time()
+        # Проверяем КД
         if current_time - last_attack_time >= ATTACK_COOLDOWN:
             print("💕 Найден смайлик 💕 - нажимаю кнопку")
             if message.buttons:
@@ -219,6 +216,7 @@ async def check_and_click(message):
                 except Exception as e:
                     print(f"⚠️ Ошибка нажатия: {e}")
         else:
+            # Пропускаем из-за КД
             remaining = ATTACK_COOLDOWN - (current_time - last_attack_time)
             print(f"⏳ Ожидание КД: {remaining:.2f}с")
     else:
@@ -236,6 +234,7 @@ async def attack_loop():
     while is_attacking:
         try:
             if attack_message_id:
+                # Получаем сообщение по ID
                 msg = await user_client.get_messages(BOT_ID, ids=attack_message_id)
                 if msg:
                     await check_and_click(msg)
@@ -244,7 +243,7 @@ async def attack_loop():
                     is_attacking = False
                     break
             
-            await asyncio.sleep(0.5)
+            await asyncio.sleep(0.5)  # Проверяем чаще для точности
             
         except Exception as e:
             print(f"⚠️ Ошибка в цикле атаки: {e}")
@@ -252,8 +251,6 @@ async def attack_loop():
 
 # ===== АВТОРИЗАЦИЯ =====
 async def start_auth(event, user_id):
-    global current_user_id
-    current_user_id = user_id
     auth_states[user_id] = {'step': 'phone'}
     user_codes[user_id] = ""
     await event.respond(
@@ -265,35 +262,15 @@ async def start_auth(event, user_id):
     )
 
 async def handle_phone(event, user_id, phone):
-    global user_client, user_session_path
-    
     phone = re.sub(r'[\s\-\(\)]', '', phone)
     if not phone.startswith('+'):
         await event.respond("❌ Неверный формат! Номер должен начинаться с `+`\nПример: `+79991234567`")
         return
     
     try:
-        if user_client:
-            try:
-                if user_client.is_connected():
-                    await user_client.disconnect()
-                await user_client._disconnect()
-            except Exception:
-                pass
-            user_client = None
-        
         session_name = f'user_{phone.replace("+", "")}'
-        user_session_path = os.path.join(SESSION_DIR, session_name)
-        
-        lock_file = f"{user_session_path}.lock"
-        if os.path.exists(lock_file):
-            try:
-                os.remove(lock_file)
-                print(f"🗑️ Удалён файл блокировки: {lock_file}")
-            except Exception:
-                pass
-        
-        client = TelegramClient(user_session_path, API_ID, API_HASH)
+        session_path = os.path.join(SESSION_DIR, session_name)
+        client = TelegramClient(session_path, API_ID, API_HASH)
         await client.connect()
         await client.send_code_request(phone)
         
@@ -311,17 +288,6 @@ async def handle_phone(event, user_id, phone):
             buttons=get_code_keyboard()
         )
         
-    except sqlite3.OperationalError as e:
-        if "database is locked" in str(e):
-            await event.respond(
-                "⚠️ **База данных занята!**\n\n"
-                "Попробуйте:\n"
-                "1. Подождать 5-10 секунд\n"
-                "2. Написать `/start` заново\n"
-                "3. Перезапустить бота"
-            )
-        else:
-            await event.respond(f"❌ Ошибка: {str(e)}\nПопробуй ещё раз отправить номер.")
     except Exception as e:
         await event.respond(f"❌ Ошибка: {str(e)}\nПопробуй ещё раз отправить номер.")
 
@@ -384,10 +350,9 @@ async def handle_password(event, user_id, password):
         await event.respond(f"❌ Неверный пароль: {str(e)}\nПопробуй ещё раз.")
 
 async def complete_auth(event, user_id, client):
-    global user_client, chat_id, chat_created, reconnect_attempts, last_activity_check, BOT_ID, current_user_id
+    global user_client, chat_id, chat_created, reconnect_attempts, last_activity_check, BOT_ID
     
     user_client = client
-    current_user_id = user_id
     me = await client.get_me()
     
     auth_states[user_id] = {
@@ -573,7 +538,7 @@ async def do_equip():
 # ===== ЗАПУСК АТАКИ =====
 async def start_attack(boss_index):
     """Запускает атаку на босса"""
-    global is_attacking, attack_task, attack_message_id, user_client, BOT_ID, current_target, last_attack_time, boss_selected
+    global is_attacking, attack_task, attack_message_id, user_client, BOT_ID, current_target, last_attack_time
     
     if is_attacking:
         print("⚠️ Атака уже запущена")
@@ -586,18 +551,19 @@ async def start_attack(boss_index):
             return False
     
     try:
-        # Отправляем "бо" только если не было выбрано
-        if not boss_selected:
-            await user_client.send_message(BOT_ID, "бо")
-            print(f"✏️ Отправил 'бо' в ЛС @{BOT_USERNAME}")
-            await asyncio.sleep(2)
+        # Отправляем "бо" боту
+        await user_client.send_message(BOT_ID, "бо")
+        print(f"✏️ Отправил 'бо' в ЛС @{BOT_USERNAME}")
+        await asyncio.sleep(2)
         
+        # Получаем сообщение с кнопками боссов
         messages = await user_client.get_messages(BOT_ID, limit=3)
         if not messages:
             print("❌ Нет сообщений от бота")
             return False
         
-        # Выбираем босса
+        # Нажимаем кнопку босса
+        boss_selected = False
         for msg in messages:
             if msg.buttons:
                 flat_buttons = [btn for row in msg.buttons for btn in row]
@@ -611,14 +577,19 @@ async def start_attack(boss_index):
             print(f"❌ Кнопка с индексом {boss_index} не найдена")
             return False
         
+        # Ждём появления сообщения с 💕
         await asyncio.sleep(2)
         
+        # Получаем последнее сообщение от бота
         last_msg = await user_client.get_messages(BOT_ID, limit=1)
         if last_msg and last_msg[0]:
             attack_message_id = last_msg[0].id
             print(f"✅ Сохранён ID сообщения: {attack_message_id}")
         
+        # Сбрасываем КД
         last_attack_time = 0
+        
+        # Запускаем атаку
         is_attacking = True
         attack_task = asyncio.create_task(attack_loop())
         print(f"✅ Атака запущена! КД: {ATTACK_COOLDOWN}с. Ожидаю 💕 в сообщении...")
@@ -630,9 +601,8 @@ async def start_attack(boss_index):
 
 # ===== ОСТАНОВКА АТАКИ =====
 async def stop_attack():
-    global is_attacking, attack_task, boss_selected
+    global is_attacking, attack_task
     is_attacking = False
-    boss_selected = False
     if attack_task and not attack_task.done():
         try:
             attack_task.cancel()
@@ -643,7 +613,7 @@ async def stop_attack():
 
 # ===== МОНИТОРИНГ БОССОВ =====
 async def check_bosses():
-    global is_active, selected_bosses, chat_id, user_client, chat_created, last_equip_time, is_equip_mode, current_target, reconnect_attempts, last_activity_check, is_attacking, BOT_ID, boss_selected
+    global is_active, selected_bosses, chat_id, user_client, chat_created, last_equip_time, is_equip_mode, current_target, reconnect_attempts, last_activity_check, is_attacking, BOT_ID
     
     if not user_client:
         return
@@ -705,12 +675,10 @@ async def check_bosses():
                 else:
                     print(f"💀 {boss['name']} умер! Разблокирован для новой атаки!")
                     current_target = None
-                    boss_selected = False  # Сбрасываем флаг при смерти босса
                     return
             else:
                 print(f"⚠️ Не найден статус для {boss['name']}, разблокирую...")
                 current_target = None
-                boss_selected = False
                 return
         
         alive_bosses = []
@@ -734,10 +702,8 @@ async def check_bosses():
                 print(f"✅ {boss['name']} атакуется в ЛС! Блокирую всех боссов до его смерти...")
             else:
                 print(f"❌ Не удалось запустить атаку на {boss['name']}")
-                boss_selected = False
         else:
             print("⏳ Нет живых боссов из выбранных")
-            boss_selected = False
         
     except Exception as e:
         print(f"Ошибка в check_bosses: {e}")
@@ -760,14 +726,13 @@ async def main_loop():
 
 # ===== ОБРАБОТКА КОМАНД =====
 async def handle_main_commands(event, text):
-    global is_active, selected_bosses, current_target, is_attacking, boss_selected
+    global is_active, selected_bosses, current_target, is_attacking
     
     if text in ["✅ ВКЛЮЧИТЬ", "❌ ВЫКЛЮЧИТЬ"]:
         is_active = not is_active
         status = "🟢 ВКЛЮЧЕН" if is_active else "🔴 ВЫКЛЮЧЕН"
         if not is_active:
             current_target = None
-            boss_selected = False
             if is_attacking:
                 await stop_attack()
         await event.respond(
@@ -813,7 +778,6 @@ async def handle_main_commands(event, text):
                     selected_bosses.remove(i)
                     if current_target == i:
                         current_target = None
-                        boss_selected = False
                         if is_attacking:
                             await stop_attack()
                 else:
