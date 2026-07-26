@@ -1,5 +1,5 @@
 from telethon import TelegramClient, events, Button
-from telethon.tl.types import Message, KeyboardButton, ChatAdminRights
+from telethon.tl.types import Message, ChatAdminRights
 from telethon.tl.functions.messages import CreateChatRequest, AddChatUserRequest, EditChatAdminRequest
 from telethon.tl.functions.channels import EditAdminRequest
 from telethon.errors import SessionPasswordNeededError, UserAlreadyParticipantError
@@ -22,8 +22,11 @@ API_HASH = "061bad708728d3d928054f16c932de6d"
 BOT_USERNAME = "IsekaiGlobal_bot"
 BOT_ID = None
 
-# КД атаки в секундах
+# КД атаки в секундах (по умолчанию 0.8)
 ATTACK_COOLDOWN = 0.8
+# Режим изменения КД
+is_cooldown_mode = False
+cooldown_user_id = None
 
 BOSSES = [
     {"emoji": "🧚", "name": "Лесная Фея"},
@@ -100,12 +103,13 @@ async def get_bot_id():
 
 # ===== КЛАВИАТУРЫ =====
 def get_main_keyboard():
-    global is_active
+    global is_active, ATTACK_COOLDOWN
     toggle_text = "❌ ВЫКЛЮЧИТЬ" if is_active else "✅ ВКЛЮЧИТЬ"
     return [
         [Button.text(toggle_text)],
         [Button.text("🎯 ВЫБРАТЬ БОССОВ")],
-        [Button.text("📊 СТАТУС БОССОВ"), Button.text("🔄 ОБНОВИТЬ")]
+        [Button.text("📊 СТАТУС БОССОВ"), Button.text("🔄 ОБНОВИТЬ")],
+        [Button.text(f"⏱️ КД: {ATTACK_COOLDOWN}с")]  # ← НОВАЯ КНОПКА
     ]
 
 def get_bosses_keyboard():
@@ -130,11 +134,20 @@ def get_code_keyboard():
         [Button.text("🔙"), Button.text("0️⃣"), Button.text("✅ ГОТОВО")]
     ]
 
+def get_cooldown_keyboard():
+    """Клавиатура для быстрого выбора КД"""
+    return [
+        [Button.text("0.5с"), Button.text("0.8с"), Button.text("1с")],
+        [Button.text("1.5с"), Button.text("2с"), Button.text("3с")],
+        [Button.text("4с"), Button.text("5с"), Button.text("10с")],
+        [Button.text("🔙 НАЗАД"), Button.text("✏️ СВОЁ ЗНАЧЕНИЕ")]
+    ]
+
 # ===== ЕДИНЫЙ ОБРАБОТЧИК СООБЩЕНИЙ =====
 @bot_client.on(events.NewMessage)
 async def handle_all_messages(event):
     """Единый обработчик всех сообщений"""
-    global last_processed_msg_id
+    global last_processed_msg_id, is_cooldown_mode, cooldown_user_id, ATTACK_COOLDOWN
     
     if not event.message or not event.message.text:
         return
@@ -151,6 +164,7 @@ async def handle_all_messages(event):
     # Обработка сообщений в ЛС с ботом
     if event.is_private:
         user_id = event.sender_id
+        text = event.raw_text
         
         # Обработка системных сообщений от пользователя к боту
         if event.message.chat_id == BOT_ID:
@@ -159,8 +173,12 @@ async def handle_all_messages(event):
                 await check_and_click(event.message)
             return
         
+        # Если мы в режиме изменения КД
+        if is_cooldown_mode and user_id == cooldown_user_id:
+            await handle_cooldown_input(event, user_id, text)
+            return
+        
         # Обработка сообщений от пользователя в ЛС с ботом-командиром
-        text = event.raw_text
         state = auth_states.get(user_id, {})
         step = state.get('step', 'idle')
         
@@ -186,10 +204,96 @@ async def handle_all_messages(event):
         if is_attacking:
             await check_and_click(event.message)
 
+# ===== ОБРАБОТКА ВВОДА КД =====
+async def handle_cooldown_input(event, user_id, text):
+    """Обрабатывает ввод нового значения КД"""
+    global ATTACK_COOLDOWN, is_cooldown_mode, cooldown_user_id
+    
+    # Быстрый выбор КД
+    cooldown_presets = {
+        "0.5с": 0.5,
+        "0.8с": 0.8,
+        "1с": 1.0,
+        "1.5с": 1.5,
+        "2с": 2.0,
+        "3с": 3.0,
+        "4с": 4.0,
+        "5с": 5.0,
+        "10с": 10.0
+    }
+    
+    if text in cooldown_presets:
+        new_cd = cooldown_presets[text]
+        ATTACK_COOLDOWN = new_cd
+        is_cooldown_mode = False
+        cooldown_user_id = None
+        await event.respond(
+            f"✅ КД успешно изменено на **{ATTACK_COOLDOWN}с**!",
+            buttons=get_main_keyboard()
+        )
+        return
+    
+    if text == "🔙 НАЗАД":
+        is_cooldown_mode = False
+        cooldown_user_id = None
+        await event.respond(
+            "🔙 Возврат в главное меню",
+            buttons=get_main_keyboard()
+        )
+        return
+    
+    if text == "✏️ СВОЁ ЗНАЧЕНИЕ":
+        await event.respond(
+            "✏️ **Напиши своё значение КД в секундах:**\n"
+            "Примеры: `0.8`, `1.5`, `3`\n\n"
+            "⚠️ Минимальное значение: 0.1с\n"
+            "⚠️ Максимальное значение: 10с",
+            buttons=Button.clear()
+        )
+        return
+    
+    # Попытка распарсить своё значение
+    try:
+        # Заменяем запятую на точку
+        text = text.replace(',', '.')
+        new_cd = float(text)
+        
+        # Проверяем диапазон
+        if new_cd < 0.1:
+            await event.respond(
+                "❌ Слишком маленькое значение! Минимум 0.1с",
+                buttons=get_cooldown_keyboard()
+            )
+            return
+        
+        if new_cd > 10:
+            await event.respond(
+                "❌ Слишком большое значение! Максимум 10с",
+                buttons=get_cooldown_keyboard()
+            )
+            return
+        
+        # Успешно установили КД
+        ATTACK_COOLDOWN = round(new_cd, 2)
+        is_cooldown_mode = False
+        cooldown_user_id = None
+        
+        await event.respond(
+            f"✅ КД успешно изменено на **{ATTACK_COOLDOWN}с**!",
+            buttons=get_main_keyboard()
+        )
+        
+    except ValueError:
+        await event.respond(
+            "❌ Неверный формат! Введи число.\n"
+            "Примеры: `0.8`, `1.5`, `3`",
+            buttons=get_cooldown_keyboard()
+        )
+
 # ===== ПРОВЕРКА И НАЖАТИЕ КНОПКИ =====
 async def check_and_click(message):
     """Проверяет наличие 💕 и нажимает кнопку"""
-    global is_attacking, current_target, last_attack_time
+    global is_attacking, current_target, last_attack_time, ATTACK_COOLDOWN
     
     if not message or not message.text:
         return
@@ -215,9 +319,9 @@ async def check_and_click(message):
     # Проверяем наличие 💕
     if "💕" in text:
         current_time = time.time()
-        # Проверяем КД
+        # Проверяем КД (используем ATTACK_COOLDOWN)
         if current_time - last_attack_time >= ATTACK_COOLDOWN:
-            print("💕 Найден смайлик 💕 - нажимаю кнопку")
+            print(f"💕 Найден смайлик 💕 - нажимаю кнопку (КД: {ATTACK_COOLDOWN}с)")
             if message.buttons:
                 try:
                     await message.click(0)
@@ -253,11 +357,11 @@ async def attack_loop():
                     is_attacking = False
                     break
             
-            await asyncio.sleep(0.5)  # Проверяем чаще для точности
+            await asyncio.sleep(0.3)  # Проверяем чаще для точности
             
         except Exception as e:
             print(f"⚠️ Ошибка в цикле атаки: {e}")
-            await asyncio.sleep(0.5)
+            await asyncio.sleep(0.3)
 
 # ===== АВТОРИЗАЦИЯ =====
 async def start_auth(event, user_id):
@@ -736,7 +840,7 @@ async def main_loop():
 
 # ===== ОБРАБОТКА КОМАНД =====
 async def handle_main_commands(event, text):
-    global is_active, selected_bosses, current_target, is_attacking
+    global is_active, selected_bosses, current_target, is_attacking, is_cooldown_mode, cooldown_user_id, ATTACK_COOLDOWN
     
     if text in ["✅ ВКЛЮЧИТЬ", "❌ ВЫКЛЮЧИТЬ"]:
         is_active = not is_active
@@ -746,8 +850,19 @@ async def handle_main_commands(event, text):
             if is_attacking:
                 await stop_attack()
         await event.respond(
-            f"📊 Статус: {status}\n🎯 Выбрано боссов: {len(selected_bosses)}",
+            f"📊 Статус: {status}\n🎯 Выбрано боссов: {len(selected_bosses)}\n⏱️ КД: {ATTACK_COOLDOWN}с",
             buttons=get_main_keyboard()
+        )
+    
+    elif text.startswith("⏱️ КД:"):
+        # Кнопка изменения КД
+        is_cooldown_mode = True
+        cooldown_user_id = event.sender_id
+        await event.respond(
+            f"⏱️ **Текущее КД:** {ATTACK_COOLDOWN}с\n\n"
+            f"Выбери новое значение КД или нажми 'СВОЁ ЗНАЧЕНИЕ' для ручного ввода:\n"
+            f"(КД - это задержка между нажатиями кнопки 💕)",
+            buttons=get_cooldown_keyboard()
         )
     
     elif text == "🎯 ВЫБРАТЬ БОССОВ":
