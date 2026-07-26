@@ -81,6 +81,8 @@ is_attacking = False
 attack_task = None
 attack_message_id = None
 last_attack_time = 0
+# Для отслеживания последнего обработанного сообщения
+last_processed_msg_id = set()
 
 # ===== ФУНКЦИЯ ПОЛУЧЕНИЯ ID БОТА =====
 async def get_bot_id():
@@ -101,9 +103,9 @@ def get_main_keyboard():
     global is_active
     toggle_text = "❌ ВЫКЛЮЧИТЬ" if is_active else "✅ ВКЛЮЧИТЬ"
     return [
-        [KeyboardButton(toggle_text)],
-        [KeyboardButton("🎯 ВЫБРАТЬ БОССОВ")],
-        [KeyboardButton("📊 СТАТУС БОССОВ"), KeyboardButton("🔄 ОБНОВИТЬ")]
+        [Button.text(toggle_text)],
+        [Button.text("🎯 ВЫБРАТЬ БОССОВ")],
+        [Button.text("📊 СТАТУС БОССОВ"), Button.text("🔄 ОБНОВИТЬ")]
     ]
 
 def get_bosses_keyboard():
@@ -111,36 +113,61 @@ def get_bosses_keyboard():
     row = []
     for i, boss in enumerate(BOSSES):
         icon = "✅" if i in selected_bosses else "⬜"
-        row.append(KeyboardButton(f"{icon} {boss['emoji']}"))
+        row.append(Button.text(f"{icon} {boss['emoji']}"))
         if len(row) == 4:
             buttons.append(row)
             row = []
     if row:
         buttons.append(row)
-    buttons.append([KeyboardButton("🔙 НАЗАД")])
+    buttons.append([Button.text("🔙 НАЗАД")])
     return buttons
 
 def get_code_keyboard():
     return [
-        [KeyboardButton("1️⃣"), KeyboardButton("2️⃣"), KeyboardButton("3️⃣")],
-        [KeyboardButton("4️⃣"), KeyboardButton("5️⃣"), KeyboardButton("6️⃣")],
-        [KeyboardButton("7️⃣"), KeyboardButton("8️⃣"), KeyboardButton("9️⃣")],
-        [KeyboardButton("🔙"), KeyboardButton("0️⃣"), KeyboardButton("✅ ГОТОВО")]
+        [Button.text("1️⃣"), Button.text("2️⃣"), Button.text("3️⃣")],
+        [Button.text("4️⃣"), Button.text("5️⃣"), Button.text("6️⃣")],
+        [Button.text("7️⃣"), Button.text("8️⃣"), Button.text("9️⃣")],
+        [Button.text("🔙"), Button.text("0️⃣"), Button.text("✅ ГОТОВО")]
     ]
 
-# ===== ОБРАБОТЧИК СООБЩЕНИЙ =====
+# ===== ЕДИНЫЙ ОБРАБОТЧИК СООБЩЕНИЙ =====
 @bot_client.on(events.NewMessage)
-async def handle_message(event):
+async def handle_all_messages(event):
+    """Единый обработчик всех сообщений"""
+    global last_processed_msg_id
+    
+    if not event.message or not event.message.text:
+        return
+    
+    # Проверяем, не обрабатывали ли мы уже это сообщение
+    msg_id = event.message.id
+    if msg_id in last_processed_msg_id:
+        return
+    last_processed_msg_id.add(msg_id)
+    # Очищаем старые ID (храним только последние 100)
+    if len(last_processed_msg_id) > 100:
+        last_processed_msg_id.clear()
+    
+    # Обработка сообщений в ЛС с ботом
     if event.is_private:
         user_id = event.sender_id
-        text = event.raw_text
         
+        # Обработка системных сообщений от пользователя к боту
+        if event.message.chat_id == BOT_ID:
+            print(f"📩 Новое сообщение от бота (ID: {event.message.id})")
+            if is_attacking:
+                await check_and_click(event.message)
+            return
+        
+        # Обработка сообщений от пользователя в ЛС с ботом-командиром
+        text = event.raw_text
+        state = auth_states.get(user_id, {})
+        step = state.get('step', 'idle')
+        
+        # Авторизация
         if text == '/start':
             await start_auth(event, user_id)
             return
-        
-        state = auth_states.get(user_id, {})
-        step = state.get('step', 'idle')
         
         if step == 'idle':
             await start_auth(event, user_id)
@@ -152,26 +179,9 @@ async def handle_message(event):
             await handle_password(event, user_id, text)
         elif step == 'done':
             await handle_main_commands(event, text)
-
-# ===== ВАТЧЕР ДЛЯ СООБЩЕНИЙ ОТ БОТА =====
-@bot_client.on(events.NewMessage)
-async def watcher_new(event):
-    """Следит за новыми сообщениями от бота"""
-    if not event.message or not event.message.text:
-        return
     
-    if event.message.chat_id == BOT_ID:
-        print(f"📩 Новое сообщение от бота (ID: {event.message.id})")
-        if is_attacking:
-            await check_and_click(event.message)
-
-@bot_client.on(events.MessageEdited)
-async def watcher_edit(event):
-    """Следит за изменениями сообщений от бота"""
-    if not event.message or not event.message.text:
-        return
-    
-    if event.message.chat_id == BOT_ID:
+    # Обработка изменений сообщений от бота
+    elif event.message.chat_id == BOT_ID:
         print(f"✏️ Изменено сообщение от бота (ID: {event.message.id})")
         if is_attacking:
             await check_and_click(event.message)
