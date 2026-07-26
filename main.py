@@ -24,7 +24,7 @@ BOT_USERNAME = "IsekaiGlobal_bot"
 BOT_ID = None
 
 # КД атаки в секундах
-ATTACK_COOLDOWN = 0.8
+ATTACK_COOLDOWN = 0.95
 
 BOSSES = [
     {"emoji": "🧚", "name": "Лесная Фея"},
@@ -84,6 +84,7 @@ is_attacking = False
 attack_task = None
 attack_message_id = None
 last_attack_time = 0
+boss_selected = False  # Флаг для предотвращения двойного выбора босса
 
 # ===== ФУНКЦИЯ ПОЛУЧЕНИЯ ID БОТА =====
 async def get_bot_id():
@@ -272,7 +273,6 @@ async def handle_phone(event, user_id, phone):
         return
     
     try:
-        # Закрываем старый клиент если есть
         if user_client:
             try:
                 if user_client.is_connected():
@@ -282,11 +282,9 @@ async def handle_phone(event, user_id, phone):
                 pass
             user_client = None
         
-        # Создаём новую сессию
         session_name = f'user_{phone.replace("+", "")}'
         user_session_path = os.path.join(SESSION_DIR, session_name)
         
-        # Удаляем блокировку базы данных если есть
         lock_file = f"{user_session_path}.lock"
         if os.path.exists(lock_file):
             try:
@@ -575,7 +573,7 @@ async def do_equip():
 # ===== ЗАПУСК АТАКИ =====
 async def start_attack(boss_index):
     """Запускает атаку на босса"""
-    global is_attacking, attack_task, attack_message_id, user_client, BOT_ID, current_target, last_attack_time
+    global is_attacking, attack_task, attack_message_id, user_client, BOT_ID, current_target, last_attack_time, boss_selected
     
     if is_attacking:
         print("⚠️ Атака уже запущена")
@@ -588,16 +586,18 @@ async def start_attack(boss_index):
             return False
     
     try:
-        await user_client.send_message(BOT_ID, "бо")
-        print(f"✏️ Отправил 'бо' в ЛС @{BOT_USERNAME}")
-        await asyncio.sleep(2)
+        # Отправляем "бо" только если не было выбрано
+        if not boss_selected:
+            await user_client.send_message(BOT_ID, "бо")
+            print(f"✏️ Отправил 'бо' в ЛС @{BOT_USERNAME}")
+            await asyncio.sleep(2)
         
         messages = await user_client.get_messages(BOT_ID, limit=3)
         if not messages:
             print("❌ Нет сообщений от бота")
             return False
         
-        boss_selected = False
+        # Выбираем босса
         for msg in messages:
             if msg.buttons:
                 flat_buttons = [btn for row in msg.buttons for btn in row]
@@ -630,8 +630,9 @@ async def start_attack(boss_index):
 
 # ===== ОСТАНОВКА АТАКИ =====
 async def stop_attack():
-    global is_attacking, attack_task
+    global is_attacking, attack_task, boss_selected
     is_attacking = False
+    boss_selected = False
     if attack_task and not attack_task.done():
         try:
             attack_task.cancel()
@@ -642,7 +643,7 @@ async def stop_attack():
 
 # ===== МОНИТОРИНГ БОССОВ =====
 async def check_bosses():
-    global is_active, selected_bosses, chat_id, user_client, chat_created, last_equip_time, is_equip_mode, current_target, reconnect_attempts, last_activity_check, is_attacking, BOT_ID
+    global is_active, selected_bosses, chat_id, user_client, chat_created, last_equip_time, is_equip_mode, current_target, reconnect_attempts, last_activity_check, is_attacking, BOT_ID, boss_selected
     
     if not user_client:
         return
@@ -704,10 +705,12 @@ async def check_bosses():
                 else:
                     print(f"💀 {boss['name']} умер! Разблокирован для новой атаки!")
                     current_target = None
+                    boss_selected = False  # Сбрасываем флаг при смерти босса
                     return
             else:
                 print(f"⚠️ Не найден статус для {boss['name']}, разблокирую...")
                 current_target = None
+                boss_selected = False
                 return
         
         alive_bosses = []
@@ -731,8 +734,10 @@ async def check_bosses():
                 print(f"✅ {boss['name']} атакуется в ЛС! Блокирую всех боссов до его смерти...")
             else:
                 print(f"❌ Не удалось запустить атаку на {boss['name']}")
+                boss_selected = False
         else:
             print("⏳ Нет живых боссов из выбранных")
+            boss_selected = False
         
     except Exception as e:
         print(f"Ошибка в check_bosses: {e}")
@@ -755,13 +760,14 @@ async def main_loop():
 
 # ===== ОБРАБОТКА КОМАНД =====
 async def handle_main_commands(event, text):
-    global is_active, selected_bosses, current_target, is_attacking
+    global is_active, selected_bosses, current_target, is_attacking, boss_selected
     
     if text in ["✅ ВКЛЮЧИТЬ", "❌ ВЫКЛЮЧИТЬ"]:
         is_active = not is_active
         status = "🟢 ВКЛЮЧЕН" if is_active else "🔴 ВЫКЛЮЧЕН"
         if not is_active:
             current_target = None
+            boss_selected = False
             if is_attacking:
                 await stop_attack()
         await event.respond(
@@ -807,6 +813,7 @@ async def handle_main_commands(event, text):
                     selected_bosses.remove(i)
                     if current_target == i:
                         current_target = None
+                        boss_selected = False
                         if is_attacking:
                             await stop_attack()
                 else:
