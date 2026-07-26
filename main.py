@@ -7,6 +7,7 @@ import asyncio
 import re
 import time
 import os
+import sqlite3
 
 # ===== СОЗДАНИЕ ПАПКИ ДЛЯ СЕССИЙ =====
 SESSION_DIR = "sessions"
@@ -60,6 +61,7 @@ BOT_SESSION_PATH = os.path.join(SESSION_DIR, 'bot_session')
 bot_client = TelegramClient(BOT_SESSION_PATH, API_ID, API_HASH)
 
 user_client = None
+user_session_path = None
 is_active = False
 selected_bosses = set()
 chat_id = None
@@ -67,6 +69,7 @@ chat_created = False
 last_equip_time = 0
 is_equip_mode = False
 current_target = None
+current_user_id = None
 
 auth_states = {}
 user_codes = {}
@@ -205,7 +208,6 @@ async def check_and_click(message):
     # Проверяем наличие 💕
     if "💕" in text:
         current_time = time.time()
-        # Проверяем КД
         if current_time - last_attack_time >= ATTACK_COOLDOWN:
             print("💕 Найден смайлик 💕 - нажимаю кнопку")
             if message.buttons:
@@ -216,7 +218,6 @@ async def check_and_click(message):
                 except Exception as e:
                     print(f"⚠️ Ошибка нажатия: {e}")
         else:
-            # Пропускаем из-за КД
             remaining = ATTACK_COOLDOWN - (current_time - last_attack_time)
             print(f"⏳ Ожидание КД: {remaining:.2f}с")
     else:
@@ -234,7 +235,6 @@ async def attack_loop():
     while is_attacking:
         try:
             if attack_message_id:
-                # Получаем сообщение по ID
                 msg = await user_client.get_messages(BOT_ID, ids=attack_message_id)
                 if msg:
                     await check_and_click(msg)
@@ -243,7 +243,7 @@ async def attack_loop():
                     is_attacking = False
                     break
             
-            await asyncio.sleep(0.5)  # Проверяем чаще для точности
+            await asyncio.sleep(0.5)
             
         except Exception as e:
             print(f"⚠️ Ошибка в цикле атаки: {e}")
@@ -251,6 +251,8 @@ async def attack_loop():
 
 # ===== АВТОРИЗАЦИЯ =====
 async def start_auth(event, user_id):
+    global current_user_id
+    current_user_id = user_id
     auth_states[user_id] = {'step': 'phone'}
     user_codes[user_id] = ""
     await event.respond(
@@ -262,15 +264,38 @@ async def start_auth(event, user_id):
     )
 
 async def handle_phone(event, user_id, phone):
+    global user_client, user_session_path
+    
     phone = re.sub(r'[\s\-\(\)]', '', phone)
     if not phone.startswith('+'):
         await event.respond("❌ Неверный формат! Номер должен начинаться с `+`\nПример: `+79991234567`")
         return
     
     try:
+        # Закрываем старый клиент если есть
+        if user_client:
+            try:
+                if user_client.is_connected():
+                    await user_client.disconnect()
+                await user_client._disconnect()
+            except Exception:
+                pass
+            user_client = None
+        
+        # Создаём новую сессию
         session_name = f'user_{phone.replace("+", "")}'
-        session_path = os.path.join(SESSION_DIR, session_name)
-        client = TelegramClient(session_path, API_ID, API_HASH)
+        user_session_path = os.path.join(SESSION_DIR, session_name)
+        
+        # Удаляем блокировку базы данных если есть
+        lock_file = f"{user_session_path}.lock"
+        if os.path.exists(lock_file):
+            try:
+                os.remove(lock_file)
+                print(f"🗑️ Удалён файл блокировки: {lock_file}")
+            except Exception:
+                pass
+        
+        client = TelegramClient(user_session_path, API_ID, API_HASH)
         await client.connect()
         await client.send_code_request(phone)
         
@@ -288,6 +313,17 @@ async def handle_phone(event, user_id, phone):
             buttons=get_code_keyboard()
         )
         
+    except sqlite3.OperationalError as e:
+        if "database is locked" in str(e):
+            await event.respond(
+                "⚠️ **База данных занята!**\n\n"
+                "Попробуйте:\n"
+                "1. Подождать 5-10 секунд\n"
+                "2. Написать `/start` заново\n"
+                "3. Перезапустить бота"
+            )
+        else:
+            await event.respond(f"❌ Ошибка: {str(e)}\nПопробуй ещё раз отправить номер.")
     except Exception as e:
         await event.respond(f"❌ Ошибка: {str(e)}\nПопробуй ещё раз отправить номер.")
 
@@ -350,9 +386,10 @@ async def handle_password(event, user_id, password):
         await event.respond(f"❌ Неверный пароль: {str(e)}\nПопробуй ещё раз.")
 
 async def complete_auth(event, user_id, client):
-    global user_client, chat_id, chat_created, reconnect_attempts, last_activity_check, BOT_ID
+    global user_client, chat_id, chat_created, reconnect_attempts, last_activity_check, BOT_ID, current_user_id
     
     user_client = client
+    current_user_id = user_id
     me = await client.get_me()
     
     auth_states[user_id] = {
@@ -551,18 +588,15 @@ async def start_attack(boss_index):
             return False
     
     try:
-        # Отправляем "бо" боту
         await user_client.send_message(BOT_ID, "бо")
         print(f"✏️ Отправил 'бо' в ЛС @{BOT_USERNAME}")
         await asyncio.sleep(2)
         
-        # Получаем сообщение с кнопками боссов
         messages = await user_client.get_messages(BOT_ID, limit=3)
         if not messages:
             print("❌ Нет сообщений от бота")
             return False
         
-        # Нажимаем кнопку босса
         boss_selected = False
         for msg in messages:
             if msg.buttons:
@@ -577,19 +611,14 @@ async def start_attack(boss_index):
             print(f"❌ Кнопка с индексом {boss_index} не найдена")
             return False
         
-        # Ждём появления сообщения с 💕
         await asyncio.sleep(2)
         
-        # Получаем последнее сообщение от бота
         last_msg = await user_client.get_messages(BOT_ID, limit=1)
         if last_msg and last_msg[0]:
             attack_message_id = last_msg[0].id
             print(f"✅ Сохранён ID сообщения: {attack_message_id}")
         
-        # Сбрасываем КД
         last_attack_time = 0
-        
-        # Запускаем атаку
         is_attacking = True
         attack_task = asyncio.create_task(attack_loop())
         print(f"✅ Атака запущена! КД: {ATTACK_COOLDOWN}с. Ожидаю 💕 в сообщении...")
