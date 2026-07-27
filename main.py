@@ -15,7 +15,7 @@ if not os.path.exists(SESSION_DIR):
     print(f"📁 Создана папка для сессий: {SESSION_DIR}")
 
 # ===== КОНФИГ =====
-BOT_TOKEN = "8982270945:AAHWQUkaezlyPONPuJOWUtDNu63fcx3yvqU"
+BOT_TOKEN = "8584514768:AAFENfVFhBAy3wxsjnaO-XqPTMzB1kgnXSo"
 API_ID = 25569323
 API_HASH = "061bad708728d3d928054f16c932de6d"
 
